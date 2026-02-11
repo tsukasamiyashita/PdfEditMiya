@@ -2,7 +2,8 @@
 """
 PdfEditMiya
 青ベースデザイン
-・処理実行中は「実行中画面」を表示
+・ファイル選択 / フォルダ選択が分かりやすい表示
+・処理中は実行中画面表示
 ・完了画面は3秒後に自動で閉じる
 機能：分割 / 結合 / 回転 / テキスト抽出
 """
@@ -20,6 +21,7 @@ from PyPDF2 import PdfReader, PdfWriter
 selected_files = []
 selected_folder = ""
 processing_popup = None
+current_mode = None  # "file" or "folder"
 
 # ==========================
 # ポップアップ関連
@@ -71,22 +73,37 @@ def show_auto_close_message(title, message, is_error=False):
 # ==========================
 
 def select_files():
-    global selected_files, selected_folder
+    global selected_files, selected_folder, current_mode
     files = filedialog.askopenfilenames(filetypes=[("PDFファイル", "*.pdf")])
     if files:
         selected_files = list(files)
         selected_folder = ""
+        current_mode = "file"
+        update_ui_mode()
         update_path_display()
-        update_button_state("file")
+        update_button_state()
 
 def select_folder():
-    global selected_folder, selected_files
+    global selected_folder, selected_files, current_mode
     folder = filedialog.askdirectory()
     if folder:
         selected_folder = folder
         selected_files = []
+        current_mode = "folder"
+        update_ui_mode()
         update_path_display()
-        update_button_state("folder")
+        update_button_state()
+
+def update_ui_mode():
+    if current_mode == "file":
+        mode_label.config(text="現在の選択モード：📄 ファイル選択",
+                          fg="#1565C0")
+    elif current_mode == "folder":
+        mode_label.config(text="現在の選択モード：📁 フォルダ選択",
+                          fg="#2E7D32")
+    else:
+        mode_label.config(text="現在の選択モード：未選択",
+                          fg="#666666")
 
 def update_path_display():
     text_paths.config(state=NORMAL)
@@ -97,17 +114,17 @@ def update_path_display():
         text_paths.insert(END, selected_folder)
     text_paths.config(state=DISABLED)
 
-def update_button_state(mode=None):
+def update_button_state():
     btn_merge.config(state=DISABLED)
     btn_split.config(state=DISABLED)
     btn_rotate.config(state=DISABLED)
     btn_text.config(state=DISABLED)
 
-    if mode == "file":
+    if current_mode == "file":
         btn_split.config(state=NORMAL)
         btn_rotate.config(state=NORMAL)
         btn_text.config(state=NORMAL)
-    elif mode == "folder":
+    elif current_mode == "folder":
         btn_merge.config(state=NORMAL)
 
 # ==========================
@@ -132,7 +149,7 @@ def get_save_dir(original_path):
         return filedialog.askdirectory()
 
 # ==========================
-# 実行ラッパー（スレッド対応）
+# 実行ラッパー
 # ==========================
 
 def run_with_loading(task_func):
@@ -236,13 +253,12 @@ def extract_text():
 # ==========================
 
 PRIMARY = "#1565C0"
-ACCENT = "#1E88E5"
 LIGHT = "#E3F2FD"
 WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("620x700")
+root.geometry("640x720")
 root.configure(bg=LIGHT)
 
 Label(root,
@@ -251,11 +267,18 @@ Label(root,
       bg=LIGHT,
       fg=PRIMARY).pack(pady=15)
 
+mode_label = Label(root,
+                   text="現在の選択モード：未選択",
+                   bg=LIGHT,
+                   fg="#666666",
+                   font=("Segoe UI", 11, "bold"))
+mode_label.pack(pady=5)
+
 btn_style = {
     "font": ("Segoe UI", 10, "bold"),
     "bg": PRIMARY,
     "fg": WHITE,
-    "activebackground": ACCENT,
+    "activebackground": "#1E88E5",
     "activeforeground": WHITE,
     "bd": 0,
     "width": 22,
@@ -268,7 +291,7 @@ Button(root, text="📁 フォルダ選択", command=select_folder, **btn_style)
 Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=8)
 
-text_paths = Text(root, height=6, width=70,
+text_paths = Text(root, height=6, width=75,
                   bg=WHITE, fg="#333333",
                   font=("Consolas", 9),
                   bd=0)
@@ -300,7 +323,7 @@ toggle_style = {
     "font": ("Segoe UI", 9, "bold"),
     "bg": PRIMARY,
     "fg": WHITE,
-    "selectcolor": ACCENT,
+    "selectcolor": "#1E88E5",
     "bd": 0
 }
 
