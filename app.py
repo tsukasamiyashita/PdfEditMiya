@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya（コンパクト版）
+PdfEditMiya（保存先 初期＝同じフォルダ）
 ・青ベースUI
-・ファイル / フォルダ選択が分かりやすい表示
+・保存先は初期状態で「同じフォルダ」
+・任意保存先は事前選択可能（未選択なら実行時に選択）
 ・回転はラジオボタン（初期：左回転）
 ・処理中ポップアップ表示
 ・完了は3秒後に自動クローズ
@@ -22,6 +23,7 @@ selected_files = []
 selected_folder = ""
 current_mode = None
 processing_popup = None
+preset_save_dir = ""   # 任意保存先
 
 # ==========================
 # ポップアップ
@@ -85,6 +87,13 @@ def select_folder():
         current_mode = "folder"
         update_ui()
 
+def select_save_dir():
+    global preset_save_dir
+    folder = filedialog.askdirectory()
+    if folder:
+        preset_save_dir = folder
+        save_dir_label.config(text=f"保存先: {preset_save_dir}")
+
 def update_ui():
     if current_mode == "file":
         mode_label.config(text="📄 ファイル選択中", fg="#1565C0")
@@ -126,10 +135,23 @@ def get_target_files():
                 if f.lower().endswith(".pdf")]
     return []
 
-def get_save_dir(path):
+def get_save_dir(original_path):
+    # ★ 初期は同じフォルダ
     if save_option.get() == 1:
-        return os.path.dirname(path)
-    return filedialog.askdirectory()
+        return os.path.dirname(original_path)
+
+    # ★ 任意フォルダ選択
+    global preset_save_dir
+    if preset_save_dir:
+        return preset_save_dir
+
+    folder = filedialog.askdirectory()
+    if folder:
+        preset_save_dir = folder
+        save_dir_label.config(text=f"保存先: {preset_save_dir}")
+        return folder
+
+    return None
 
 def run_task(func):
     def task():
@@ -223,8 +245,8 @@ WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("600x720")
-root.minsize(600, 720)
+root.geometry("600x780")
+root.minsize(600, 780)
 root.configure(bg=LIGHT)
 
 Label(root, text="PdfEditMiya",
@@ -255,25 +277,40 @@ Label(root, text="選択パス",
       bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=6)
 
-text_paths = Text(root, height=6, width=70,
-                  font=("Consolas", 9),
-                  bd=0)
+text_paths = Text(root, height=5, width=70,
+                  font=("Consolas", 9), bd=0)
 text_paths.pack()
 text_paths.config(state=DISABLED)
 
-Label(root, text="保存先",
+# ==========================
+# 保存先設定
+# ==========================
+
+Label(root, text="保存先設定",
       bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=8)
 
-save_option = IntVar(value=1)
+save_option = IntVar(value=1)  # ★ 初期＝同じフォルダ
 
-Radiobutton(root, text="同じフォルダ",
+Radiobutton(root, text="同じフォルダ（初期）",
             variable=save_option, value=1,
             bg=LIGHT).pack()
 
 Radiobutton(root, text="任意のフォルダ",
             variable=save_option, value=2,
             bg=LIGHT).pack()
+
+Button(root, text="📂 任意保存先を事前選択",
+       command=select_save_dir, **btn_style).pack(pady=3)
+
+save_dir_label = Label(root,
+                       text="保存先: 同じフォルダ",
+                       bg=LIGHT, font=("Segoe UI", 9))
+save_dir_label.pack(pady=3)
+
+# ==========================
+# 回転
+# ==========================
 
 Label(root, text="回転方法",
       bg=LIGHT, fg=PRIMARY,
@@ -293,9 +330,13 @@ Radiobutton(root, text="右回転（90°）",
             variable=rotate_option, value=90,
             bg=LIGHT).pack()
 
+# ==========================
+# 操作
+# ==========================
+
 Label(root, text="操作",
       bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 11, "bold")).pack(pady=12)
+      font=("Segoe UI", 11, "bold")).pack(pady=10)
 
 btn_merge = Button(root, text="🔗 結合",
                    command=lambda: run_task(merge_pdfs),
@@ -310,9 +351,9 @@ btn_text = Button(root, text="📝 テキスト抽出",
                   command=lambda: run_task(extract_text),
                   state=DISABLED, **btn_style)
 
-btn_merge.pack(pady=4)
-btn_split.pack(pady=4)
-btn_rotate.pack(pady=4)
-btn_text.pack(pady=4)
+btn_merge.pack(pady=3)
+btn_split.pack(pady=3)
+btn_rotate.pack(pady=3)
+btn_text.pack(pady=3)
 
 root.mainloop()
