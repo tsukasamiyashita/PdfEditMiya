@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 PdfEditMiya
-青ベースデザイン（ボタン少し小さめ）
+青ベースデザイン（自動で完了画面3秒後に閉じる）
 機能：分割 / 結合 / 回転 / テキスト抽出
 ・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
 ・フォルダ選択 → 結合のみ実行可
@@ -12,7 +12,7 @@ PdfEditMiya
 
 import os
 from tkinter import *
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 from PyPDF2 import PdfReader, PdfWriter
 
 # ==========================
@@ -21,6 +21,29 @@ from PyPDF2 import PdfReader, PdfWriter
 
 selected_files = []
 selected_folder = ""
+
+# ==========================
+# 完了ポップアップ（3秒自動クローズ）
+# ==========================
+
+def show_auto_close_message(title, message, is_error=False):
+    popup = Toplevel(root)
+    popup.title(title)
+    popup.geometry("300x120")
+    popup.resizable(False, False)
+
+    bg_color = "#E3F2FD" if not is_error else "#FFEBEE"
+    fg_color = "#1565C0" if not is_error else "#C62828"
+
+    popup.configure(bg=bg_color)
+
+    Label(popup, text=message,
+          bg=bg_color,
+          fg=fg_color,
+          font=("Segoe UI", 10, "bold")).pack(expand=True)
+
+    # 3秒後に閉じる
+    popup.after(3000, popup.destroy)
 
 # ==========================
 # 選択処理
@@ -113,9 +136,9 @@ def merge_pdfs():
         with open(output_path, "wb") as f:
             writer.write(f)
 
-        messagebox.showinfo("完了", "結合完了しました")
+        show_auto_close_message("完了", "結合完了しました")
     except Exception:
-        messagebox.showerror("エラー", "結合失敗（0扱い）")
+        show_auto_close_message("エラー", "結合失敗（0扱い）", True)
 
 def split_pdfs():
     try:
@@ -134,9 +157,9 @@ def split_pdfs():
                 with open(output_path, "wb") as f:
                     writer.write(f)
 
-        messagebox.showinfo("完了", "分割完了しました")
+        show_auto_close_message("完了", "分割完了しました")
     except Exception:
-        messagebox.showerror("エラー", "分割失敗（0扱い）")
+        show_auto_close_message("エラー", "分割失敗（0扱い）", True)
 
 def rotate_pdfs():
     try:
@@ -162,9 +185,9 @@ def rotate_pdfs():
             with open(output_path, "wb") as f:
                 writer.write(f)
 
-        messagebox.showinfo("完了", "回転完了しました")
+        show_auto_close_message("完了", "回転完了しました")
     except Exception:
-        messagebox.showerror("エラー", "回転失敗（角度未選択は0扱い）")
+        show_auto_close_message("エラー", "回転失敗（角度未選択は0扱い）", True)
 
 def extract_text():
     try:
@@ -186,9 +209,9 @@ def extract_text():
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(text)
 
-        messagebox.showinfo("完了", "テキスト抽出完了しました")
+        show_auto_close_message("完了", "テキスト抽出完了しました")
     except Exception:
-        messagebox.showerror("エラー", "テキスト抽出失敗（0扱い）")
+        show_auto_close_message("エラー", "テキスト抽出失敗（0扱い）", True)
 
 # ==========================
 # UIデザイン（青ベース）
@@ -210,7 +233,6 @@ Label(root,
       bg=LIGHT,
       fg=PRIMARY).pack(pady=15)
 
-# ボタン共通スタイル（少し小さめ）
 btn_style = {
     "font": ("Segoe UI", 10, "bold"),
     "bg": PRIMARY,
