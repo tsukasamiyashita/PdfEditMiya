@@ -181,7 +181,10 @@ def extract_text():
 
 root = Tk()
 root.title("PDF編集アプリ")
-root.geometry("500x420")
+
+# ★ すべてのボタンが確実に表示されるサイズ
+root.geometry("520x650")
+root.minsize(520, 650)
 
 Label(root, text="PDF編集ツール", font=("Arial", 16)).pack(pady=10)
 
