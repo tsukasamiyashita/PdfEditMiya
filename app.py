@@ -2,8 +2,9 @@
 """
 シンプルPDF編集デスクトップアプリ
 機能：分割 / 結合 / 回転 / テキスト抽出
+・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
+・フォルダ選択 → 結合のみ実行可
 回転は 90 / 180 / 270 度のトグル選択式
-選択したファイル／フォルダのパスを表示
 1ファイル完結版
 """
 
@@ -13,11 +14,15 @@ from tkinter import filedialog, messagebox
 from PyPDF2 import PdfReader, PdfWriter
 
 # ==========================
-# 共通処理
+# 共通変数
 # ==========================
 
 selected_files = []
 selected_folder = ""
+
+# ==========================
+# 選択処理
+# ==========================
 
 def select_files():
     global selected_files, selected_folder
@@ -28,6 +33,7 @@ def select_files():
         selected_files = list(files)
         selected_folder = ""
         update_path_display()
+        update_button_state(mode="file")
 
 def select_folder():
     global selected_folder, selected_files
@@ -36,29 +42,48 @@ def select_folder():
         selected_folder = folder
         selected_files = []
         update_path_display()
+        update_button_state(mode="folder")
 
 def update_path_display():
+    text_paths.delete(1.0, END)
     if selected_files:
-        paths = "\n".join(selected_files)
-        text_paths.delete(1.0, END)
-        text_paths.insert(END, paths)
+        text_paths.insert(END, "\n".join(selected_files))
     elif selected_folder:
-        text_paths.delete(1.0, END)
         text_paths.insert(END, selected_folder)
-    else:
-        text_paths.delete(1.0, END)
+
+def update_button_state(mode=None):
+    """
+    mode:
+      file   → 分割 / 回転 / テキスト抽出 有効
+      folder → 結合 有効
+      None   → 全て無効
+    """
+    btn_merge.config(state=DISABLED)
+    btn_split.config(state=DISABLED)
+    btn_rotate.config(state=DISABLED)
+    btn_text.config(state=DISABLED)
+
+    if mode == "file":
+        btn_split.config(state=NORMAL)
+        btn_rotate.config(state=NORMAL)
+        btn_text.config(state=NORMAL)
+    elif mode == "folder":
+        btn_merge.config(state=NORMAL)
+
+# ==========================
+# 共通ユーティリティ
+# ==========================
 
 def get_target_files():
     if selected_files:
         return selected_files
     elif selected_folder:
-        pdfs = []
-        for f in os.listdir(selected_folder):
-            if f.lower().endswith(".pdf"):
-                pdfs.append(os.path.join(selected_folder, f))
-        return pdfs
-    else:
-        return []
+        return [
+            os.path.join(selected_folder, f)
+            for f in os.listdir(selected_folder)
+            if f.lower().endswith(".pdf")
+        ]
+    return []
 
 def get_save_dir(original_path):
     if save_option.get() == 1:
@@ -86,7 +111,7 @@ def merge_pdfs():
         if not save_dir:
             return
 
-        base = os.path.splitext(os.path.basename(files[0]))[0]
+        base = os.path.basename(selected_folder)
         output_path = os.path.join(save_dir, base + "_Merge.pdf")
 
         with open(output_path, "wb") as f:
@@ -98,11 +123,7 @@ def merge_pdfs():
 
 def split_pdfs():
     try:
-        files = get_target_files()
-        if not files:
-            raise Exception()
-
-        for file in files:
+        for file in selected_files:
             reader = PdfReader(file)
             save_dir = get_save_dir(file)
             if not save_dir:
@@ -123,15 +144,11 @@ def split_pdfs():
 
 def rotate_pdfs():
     try:
-        files = get_target_files()
-        if not files:
-            raise Exception()
-
         degree = rotate_option.get()
         if degree == 0:
             raise Exception()
 
-        for file in files:
+        for file in selected_files:
             reader = PdfReader(file)
             writer = PdfWriter()
 
@@ -155,11 +172,7 @@ def rotate_pdfs():
 
 def extract_text():
     try:
-        files = get_target_files()
-        if not files:
-            raise Exception()
-
-        for file in files:
+        for file in selected_files:
             reader = PdfReader(file)
             text = ""
 
@@ -197,7 +210,7 @@ Button(root, text="フォルダ選択", command=select_folder, width=25).pack(pa
 
 Label(root, text="選択パス").pack(pady=5)
 
-text_paths = Text(root, height=10, width=70)
+text_paths = Text(root, height=8, width=70)
 text_paths.pack(pady=5)
 
 Label(root, text="保存先").pack()
@@ -208,19 +221,26 @@ Radiobutton(root, text="任意のフォルダ", variable=save_option, value=2).p
 Label(root, text="回転角度").pack(pady=5)
 
 rotate_option = IntVar(value=0)
-
 frame_rotate = Frame(root)
 frame_rotate.pack()
 
-Radiobutton(frame_rotate, text="90°", variable=rotate_option, value=90, indicatoron=False, width=8).grid(row=0, column=0, padx=5)
-Radiobutton(frame_rotate, text="180°", variable=rotate_option, value=180, indicatoron=False, width=8).grid(row=0, column=1, padx=5)
-Radiobutton(frame_rotate, text="270°", variable=rotate_option, value=270, indicatoron=False, width=8).grid(row=0, column=2, padx=5)
+Radiobutton(frame_rotate, text="90°", variable=rotate_option, value=90,
+            indicatoron=False, width=8).grid(row=0, column=0, padx=5)
+Radiobutton(frame_rotate, text="180°", variable=rotate_option, value=180,
+            indicatoron=False, width=8).grid(row=0, column=1, padx=5)
+Radiobutton(frame_rotate, text="270°", variable=rotate_option, value=270,
+            indicatoron=False, width=8).grid(row=0, column=2, padx=5)
 
 Label(root, text="操作").pack(pady=10)
 
-Button(root, text="結合", command=merge_pdfs, width=25).pack(pady=5)
-Button(root, text="分割", command=split_pdfs, width=25).pack(pady=5)
-Button(root, text="回転", command=rotate_pdfs, width=25).pack(pady=5)
-Button(root, text="テキスト抽出", command=extract_text, width=25).pack(pady=5)
+btn_merge = Button(root, text="結合", command=merge_pdfs, width=25, state=DISABLED)
+btn_split = Button(root, text="分割", command=split_pdfs, width=25, state=DISABLED)
+btn_rotate = Button(root, text="回転", command=rotate_pdfs, width=25, state=DISABLED)
+btn_text = Button(root, text="テキスト抽出", command=extract_text, width=25, state=DISABLED)
+
+btn_merge.pack(pady=5)
+btn_split.pack(pady=5)
+btn_rotate.pack(pady=5)
+btn_text.pack(pady=5)
 
 root.mainloop()
