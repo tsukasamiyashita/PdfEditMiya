@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya
-青ベースデザイン
-・ファイル選択 / フォルダ選択が分かりやすい表示
+PdfEditMiya（コンパクト版）
+・青ベースUI
+・ファイル / フォルダ選択が分かりやすい表示
 ・回転はラジオボタン（初期：左回転）
-・処理中は実行中画面表示
-・完了画面は3秒後に自動で閉じる
-・全ボタンが確実に表示されるウィンドウサイズ
-機能：分割 / 結合 / 回転 / テキスト抽出
+・処理中ポップアップ表示
+・完了は3秒後に自動クローズ
 """
 
 import os
@@ -22,26 +20,24 @@ from PyPDF2 import PdfReader, PdfWriter
 
 selected_files = []
 selected_folder = ""
+current_mode = None
 processing_popup = None
-current_mode = None  # "file" or "folder"
 
 # ==========================
-# ポップアップ関連
+# ポップアップ
 # ==========================
 
-def show_processing(message="処理実行中..."):
+def show_processing(msg="処理実行中..."):
     global processing_popup
     processing_popup = Toplevel(root)
     processing_popup.title("実行中")
-    processing_popup.geometry("320x130")
-    processing_popup.resizable(False, False)
+    processing_popup.geometry("260x100")
     processing_popup.configure(bg="#E3F2FD")
+    processing_popup.resizable(False, False)
 
-    Label(processing_popup,
-          text=message,
-          bg="#E3F2FD",
-          fg="#1565C0",
-          font=("Segoe UI", 11, "bold")).pack(expand=True)
+    Label(processing_popup, text=msg,
+          bg="#E3F2FD", fg="#1565C0",
+          font=("Segoe UI", 10, "bold")).pack(expand=True)
 
     processing_popup.grab_set()
     processing_popup.update()
@@ -52,23 +48,20 @@ def close_processing():
         processing_popup.destroy()
         processing_popup = None
 
-def show_auto_close_message(title, message, is_error=False):
-    popup = Toplevel(root)
-    popup.title(title)
-    popup.geometry("320x130")
-    popup.resizable(False, False)
+def auto_close_message(title, msg, error=False):
+    win = Toplevel(root)
+    win.title(title)
+    win.geometry("260x100")
+    win.resizable(False, False)
 
-    bg_color = "#E3F2FD" if not is_error else "#FFEBEE"
-    fg_color = "#1565C0" if not is_error else "#C62828"
+    bg = "#FFEBEE" if error else "#E3F2FD"
+    fg = "#C62828" if error else "#1565C0"
 
-    popup.configure(bg=bg_color)
-
-    Label(popup, text=message,
-          bg=bg_color,
-          fg=fg_color,
+    win.configure(bg=bg)
+    Label(win, text=msg, bg=bg, fg=fg,
           font=("Segoe UI", 10, "bold")).pack(expand=True)
 
-    popup.after(3000, popup.destroy)
+    win.after(3000, win.destroy)
 
 # ==========================
 # 選択処理
@@ -76,14 +69,12 @@ def show_auto_close_message(title, message, is_error=False):
 
 def select_files():
     global selected_files, selected_folder, current_mode
-    files = filedialog.askopenfilenames(filetypes=[("PDFファイル", "*.pdf")])
+    files = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
     if files:
         selected_files = list(files)
         selected_folder = ""
         current_mode = "file"
-        update_ui_mode()
-        update_path_display()
-        update_button_state()
+        update_ui()
 
 def select_folder():
     global selected_folder, selected_files, current_mode
@@ -92,22 +83,16 @@ def select_folder():
         selected_folder = folder
         selected_files = []
         current_mode = "folder"
-        update_ui_mode()
-        update_path_display()
-        update_button_state()
+        update_ui()
 
-def update_ui_mode():
+def update_ui():
     if current_mode == "file":
-        mode_label.config(text="現在の選択モード：📄 ファイル選択",
-                          fg="#1565C0")
+        mode_label.config(text="📄 ファイル選択中", fg="#1565C0")
     elif current_mode == "folder":
-        mode_label.config(text="現在の選択モード：📁 フォルダ選択",
-                          fg="#2E7D32")
+        mode_label.config(text="📁 フォルダ選択中", fg="#2E7D32")
     else:
-        mode_label.config(text="現在の選択モード：未選択",
-                          fg="#666666")
+        mode_label.config(text="未選択", fg="#666666")
 
-def update_path_display():
     text_paths.config(state=NORMAL)
     text_paths.delete(1.0, END)
     if selected_files:
@@ -116,7 +101,6 @@ def update_path_display():
         text_paths.insert(END, selected_folder)
     text_paths.config(state=DISABLED)
 
-def update_button_state():
     btn_merge.config(state=DISABLED)
     btn_split.config(state=DISABLED)
     btn_rotate.config(state=DISABLED)
@@ -130,45 +114,38 @@ def update_button_state():
         btn_merge.config(state=NORMAL)
 
 # ==========================
-# 共通ユーティリティ
+# 共通処理
 # ==========================
 
 def get_target_files():
     if selected_files:
         return selected_files
-    elif selected_folder:
-        return [
-            os.path.join(selected_folder, f)
-            for f in os.listdir(selected_folder)
-            if f.lower().endswith(".pdf")
-        ]
+    if selected_folder:
+        return [os.path.join(selected_folder, f)
+                for f in os.listdir(selected_folder)
+                if f.lower().endswith(".pdf")]
     return []
 
-def get_save_dir(original_path):
+def get_save_dir(path):
     if save_option.get() == 1:
-        return os.path.dirname(original_path)
-    else:
-        return filedialog.askdirectory()
+        return os.path.dirname(path)
+    return filedialog.askdirectory()
 
-# ==========================
-# 実行ラッパー
-# ==========================
-
-def run_with_loading(task_func):
+def run_task(func):
     def task():
         try:
             show_processing()
-            task_func()
+            func()
             close_processing()
-            show_auto_close_message("完了", "処理が完了しました")
+            auto_close_message("完了", "処理が完了しました")
         except Exception:
             close_processing()
-            show_auto_close_message("エラー", "処理失敗（0扱い）", True)
+            auto_close_message("エラー", "処理失敗（0扱い）", True)
 
     threading.Thread(target=task).start()
 
 # ==========================
-# PDF操作
+# PDF処理
 # ==========================
 
 def merge_pdfs():
@@ -177,79 +154,67 @@ def merge_pdfs():
         raise Exception()
 
     writer = PdfWriter()
-    for file in files:
-        reader = PdfReader(file)
-        for page in reader.pages:
-            writer.add_page(page)
+    for f in files:
+        reader = PdfReader(f)
+        for p in reader.pages:
+            writer.add_page(p)
 
     save_dir = get_save_dir(files[0])
     if not save_dir:
         return
 
-    base = os.path.basename(selected_folder)
-    output_path = os.path.join(save_dir, base + "_Merge.pdf")
-
-    with open(output_path, "wb") as f:
-        writer.write(f)
+    name = os.path.basename(selected_folder)
+    with open(os.path.join(save_dir, name + "_Merge.pdf"), "wb") as out:
+        writer.write(out)
 
 def split_pdfs():
-    for file in selected_files:
-        reader = PdfReader(file)
-        save_dir = get_save_dir(file)
+    for f in selected_files:
+        reader = PdfReader(f)
+        save_dir = get_save_dir(f)
         if not save_dir:
             return
-
-        base = os.path.splitext(os.path.basename(file))[0]
-
-        for i, page in enumerate(reader.pages):
+        base = os.path.splitext(os.path.basename(f))[0]
+        for i, p in enumerate(reader.pages):
             writer = PdfWriter()
-            writer.add_page(page)
-            output_path = os.path.join(save_dir, f"{base}_Split_{i+1}.pdf")
-            with open(output_path, "wb") as f:
-                writer.write(f)
+            writer.add_page(p)
+            with open(os.path.join(save_dir,
+                     f"{base}_Split_{i+1}.pdf"), "wb") as out:
+                writer.write(out)
 
 def rotate_pdfs():
-    degree = rotate_option.get()
-
-    for file in selected_files:
-        reader = PdfReader(file)
+    deg = rotate_option.get()
+    for f in selected_files:
+        reader = PdfReader(f)
         writer = PdfWriter()
-
-        for page in reader.pages:
-            page.rotate(degree)
-            writer.add_page(page)
-
-        save_dir = get_save_dir(file)
+        for p in reader.pages:
+            p.rotate(deg)
+            writer.add_page(p)
+        save_dir = get_save_dir(f)
         if not save_dir:
             return
-
-        base = os.path.splitext(os.path.basename(file))[0]
-        output_path = os.path.join(save_dir, f"{base}_Rotate.pdf")
-
-        with open(output_path, "wb") as f:
-            writer.write(f)
+        base = os.path.splitext(os.path.basename(f))[0]
+        with open(os.path.join(save_dir,
+                 f"{base}_Rotate.pdf"), "wb") as out:
+            writer.write(out)
 
 def extract_text():
-    for file in selected_files:
-        reader = PdfReader(file)
+    for f in selected_files:
+        reader = PdfReader(f)
         text = ""
-
-        for page in reader.pages:
-            t = page.extract_text()
+        for p in reader.pages:
+            t = p.extract_text()
             text += t if t else ""
-
-        save_dir = get_save_dir(file)
+        save_dir = get_save_dir(f)
         if not save_dir:
             return
-
-        base = os.path.splitext(os.path.basename(file))[0]
-        output_path = os.path.join(save_dir, f"{base}_Text.txt")
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        base = os.path.splitext(os.path.basename(f))[0]
+        with open(os.path.join(save_dir,
+                 f"{base}_Text.txt"), "w",
+                 encoding="utf-8") as out:
+            out.write(text)
 
 # ==========================
-# UIデザイン
+# UI
 # ==========================
 
 PRIMARY = "#1565C0"
@@ -258,106 +223,96 @@ WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-
-# ★ 全ボタンが確実に表示されるサイズ
-root.geometry("700x880")
-root.minsize(700, 880)
-
+root.geometry("600x720")
+root.minsize(600, 720)
 root.configure(bg=LIGHT)
 
-Label(root,
-      text="PdfEditMiya",
-      font=("Segoe UI", 22, "bold"),
-      bg=LIGHT,
-      fg=PRIMARY).pack(pady=15)
+Label(root, text="PdfEditMiya",
+      font=("Segoe UI", 18, "bold"),
+      bg=LIGHT, fg=PRIMARY).pack(pady=10)
 
-mode_label = Label(root,
-                   text="現在の選択モード：未選択",
-                   bg=LIGHT,
-                   fg="#666666",
-                   font=("Segoe UI", 12, "bold"))
-mode_label.pack(pady=8)
+mode_label = Label(root, text="未選択",
+                   bg=LIGHT, font=("Segoe UI", 11, "bold"))
+mode_label.pack(pady=5)
 
 btn_style = {
-    "font": ("Segoe UI", 10, "bold"),
+    "font": ("Segoe UI", 9, "bold"),
     "bg": PRIMARY,
     "fg": WHITE,
     "activebackground": "#1E88E5",
-    "activeforeground": WHITE,
     "bd": 0,
-    "width": 24,
+    "width": 20,
     "height": 1
 }
 
-Button(root, text="📄 ファイル選択", command=select_files, **btn_style).pack(pady=6)
-Button(root, text="📁 フォルダ選択", command=select_folder, **btn_style).pack(pady=6)
+Button(root, text="📄 ファイル選択",
+       command=select_files, **btn_style).pack(pady=4)
 
-Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 11, "bold")).pack(pady=10)
+Button(root, text="📁 フォルダ選択",
+       command=select_folder, **btn_style).pack(pady=4)
 
-text_paths = Text(root, height=8, width=85,
-                  bg=WHITE, fg="#333333",
+Label(root, text="選択パス",
+      bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=6)
+
+text_paths = Text(root, height=6, width=70,
                   font=("Consolas", 9),
                   bd=0)
-text_paths.pack(pady=6)
+text_paths.pack()
 text_paths.config(state=DISABLED)
 
-Label(root, text="保存先", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 11, "bold")).pack(pady=12)
+Label(root, text="保存先",
+      bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=8)
 
 save_option = IntVar(value=1)
+
 Radiobutton(root, text="同じフォルダ",
             variable=save_option, value=1,
-            bg=LIGHT, selectcolor=WHITE,
-            font=("Segoe UI", 10)).pack()
+            bg=LIGHT).pack()
 
 Radiobutton(root, text="任意のフォルダ",
             variable=save_option, value=2,
-            bg=LIGHT, selectcolor=WHITE,
-            font=("Segoe UI", 10)).pack()
+            bg=LIGHT).pack()
 
-Label(root, text="回転方法", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 11, "bold")).pack(pady=15)
+Label(root, text="回転方法",
+      bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=8)
 
 rotate_option = IntVar(value=270)
 
 Radiobutton(root, text="左回転（270°）",
             variable=rotate_option, value=270,
-            bg=LIGHT, selectcolor=WHITE,
-            font=("Segoe UI", 11)).pack(pady=3)
+            bg=LIGHT).pack()
 
 Radiobutton(root, text="上下回転（180°）",
             variable=rotate_option, value=180,
-            bg=LIGHT, selectcolor=WHITE,
-            font=("Segoe UI", 11)).pack(pady=3)
+            bg=LIGHT).pack()
 
 Radiobutton(root, text="右回転（90°）",
             variable=rotate_option, value=90,
-            bg=LIGHT, selectcolor=WHITE,
-            font=("Segoe UI", 11)).pack(pady=3)
+            bg=LIGHT).pack()
 
-Label(root, text="操作", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 12, "bold")).pack(pady=20)
+Label(root, text="操作",
+      bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 11, "bold")).pack(pady=12)
 
 btn_merge = Button(root, text="🔗 結合",
-                   command=lambda: run_with_loading(merge_pdfs),
+                   command=lambda: run_task(merge_pdfs),
                    state=DISABLED, **btn_style)
-
 btn_split = Button(root, text="✂ 分割",
-                   command=lambda: run_with_loading(split_pdfs),
+                   command=lambda: run_task(split_pdfs),
                    state=DISABLED, **btn_style)
-
-btn_rotate = Button(root, text="🔄 回転実行",
-                    command=lambda: run_with_loading(rotate_pdfs),
+btn_rotate = Button(root, text="🔄 回転",
+                    command=lambda: run_task(rotate_pdfs),
                     state=DISABLED, **btn_style)
-
 btn_text = Button(root, text="📝 テキスト抽出",
-                  command=lambda: run_with_loading(extract_text),
+                  command=lambda: run_task(extract_text),
                   state=DISABLED, **btn_style)
 
-btn_merge.pack(pady=6)
-btn_split.pack(pady=6)
-btn_rotate.pack(pady=6)
-btn_text.pack(pady=6)
+btn_merge.pack(pady=4)
+btn_split.pack(pady=4)
+btn_rotate.pack(pady=4)
+btn_text.pack(pady=4)
 
 root.mainloop()
