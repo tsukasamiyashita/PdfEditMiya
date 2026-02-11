@@ -9,6 +9,7 @@ PdfEditMiya
 ・回転ラジオ（初期：左回転）
 ・処理中ポップアップ表示
 ・完了は3秒後に自動クローズ
+・選択パスはテキストボックスではなくラベル表示
 """
 
 import os
@@ -28,6 +29,10 @@ processing_popup = None
 preset_save_dir = ""
 cancelled = False
 
+PRIMARY = "#1565C0"
+LIGHT = "#E3F2FD"
+WHITE = "#FFFFFF"
+
 # ==========================
 # ポップアップ
 # ==========================
@@ -37,11 +42,11 @@ def show_processing(msg="処理実行中..."):
     processing_popup = Toplevel(root)
     processing_popup.title("実行中")
     processing_popup.geometry("260x100")
-    processing_popup.configure(bg="#E3F2FD")
+    processing_popup.configure(bg=LIGHT)
     processing_popup.resizable(False, False)
 
     Label(processing_popup, text=msg,
-          bg="#E3F2FD", fg="#1565C0",
+          bg=LIGHT, fg=PRIMARY,
           font=("Segoe UI", 10, "bold")).pack(expand=True)
 
     processing_popup.grab_set()
@@ -59,8 +64,8 @@ def auto_close_message(title, msg, error=False):
     win.geometry("260x100")
     win.resizable(False, False)
 
-    bg = "#FFEBEE" if error else "#E3F2FD"
-    fg = "#C62828" if error else "#1565C0"
+    bg = "#FFEBEE" if error else LIGHT
+    fg = "#C62828" if error else PRIMARY
 
     win.configure(bg=bg)
     Label(win, text=msg, bg=bg, fg=fg,
@@ -98,37 +103,38 @@ def select_save_dir():
         save_dir_label.config(text=f"保存先: {preset_save_dir}")
 
 def on_save_option_change():
-    """
-    保存先ラジオ切替時の処理
-    """
     global preset_save_dir
 
-    # 任意フォルダ選択時 → 未選択へ
     if save_option.get() == 2:
         preset_save_dir = ""
         save_dir_label.config(text="保存先: 未選択")
 
-    # 同じフォルダを選択し直した場合 → 表示を戻す
     if save_option.get() == 1:
         preset_save_dir = ""
         save_dir_label.config(text="保存先: 同じフォルダ")
 
+# ==========================
+# UI更新
+# ==========================
+
 def update_ui():
+    # モード表示
     if current_mode == "file":
-        mode_label.config(text="📄 ファイル選択中", fg="#1565C0")
+        mode_label.config(text="📄 ファイル選択中", fg=PRIMARY)
+        if len(selected_files) == 1:
+            path_text = selected_files[0]
+        else:
+            path_text = f"{len(selected_files)}件のPDFを選択中"
     elif current_mode == "folder":
         mode_label.config(text="📁 フォルダ選択中", fg="#2E7D32")
+        path_text = selected_folder
     else:
         mode_label.config(text="未選択", fg="#666666")
+        path_text = "未選択"
 
-    text_paths.config(state=NORMAL)
-    text_paths.delete(1.0, END)
-    if selected_files:
-        text_paths.insert(END, "\n".join(selected_files))
-    elif selected_folder:
-        text_paths.insert(END, selected_folder)
-    text_paths.config(state=DISABLED)
+    path_label.config(text=f"選択パス: {path_text}")
 
+    # ボタン制御
     btn_merge.config(state=DISABLED)
     btn_split.config(state=DISABLED)
     btn_rotate.config(state=DISABLED)
@@ -262,17 +268,13 @@ def extract_text():
             out.write(text)
 
 # ==========================
-# UI
+# UI構築
 # ==========================
-
-PRIMARY = "#1565C0"
-LIGHT = "#E3F2FD"
-WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("600x760")
-root.minsize(600, 760)
+root.geometry("600x720")
+root.minsize(600, 720)
 root.configure(bg=LIGHT)
 
 Label(root, text="PdfEditMiya",
@@ -303,10 +305,13 @@ Label(root, text="選択パス",
       bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=6)
 
-text_paths = Text(root, height=5, width=70,
-                  font=("Consolas", 9), bd=0)
-text_paths.pack()
-text_paths.config(state=DISABLED)
+path_label = Label(root,
+                   text="選択パス: 未選択",
+                   bg=LIGHT,
+                   wraplength=550,
+                   justify=LEFT,
+                   font=("Segoe UI", 9))
+path_label.pack(pady=4)
 
 Label(root, text="保存先設定",
       bg=LIGHT, fg=PRIMARY,
