@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya
 シンプルPDF編集デスクトップアプリ
 機能：分割 / 結合 / 回転 / テキスト抽出
 ・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
@@ -195,11 +194,11 @@ def extract_text():
 # ==========================
 
 root = Tk()
-root.title("PdfEditMiya")
+root.title("PDF編集アプリ")
 root.geometry("600x700")
 root.minsize(600, 700)
 
-Label(root, text="PdfEditMiya", font=("Arial", 18)).pack(pady=10)
+Label(root, text="PDF編集ツール", font=("Arial", 16)).pack(pady=10)
 
 Button(root, text="ファイル選択", command=select_files, width=25).pack(pady=5)
 Button(root, text="フォルダ選択", command=select_folder, width=25).pack(pady=5)
@@ -219,6 +218,8 @@ Label(root, text="回転方法").pack(pady=5)
 rotate_option = IntVar(value=0)
 frame_rotate = Frame(root)
 frame_rotate.pack()
+
+# ★ 左から：左回転（270°）→ 上下回転（180°）→ 右回転（90°）
 
 Radiobutton(frame_rotate, text="左回転", variable=rotate_option,
             value=270, indicatoron=False, width=10)\
