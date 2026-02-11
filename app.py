@@ -2,12 +2,11 @@
 """
 シンプルPDF編集デスクトップアプリ
 機能：分割 / 結合 / 回転 / テキスト抽出
+回転は 90 / 180 / 270 度のトグル選択式
 1ファイル完結版
 """
 
 import os
-import sys
-import traceback
 from tkinter import *
 from tkinter import filedialog, messagebox
 from PyPDF2 import PdfReader, PdfWriter
@@ -20,20 +19,19 @@ selected_files = []
 selected_folder = ""
 
 def select_files():
-    global selected_files
+    global selected_files, selected_folder
     files = filedialog.askopenfilenames(
         filetypes=[("PDFファイル", "*.pdf")]
     )
     selected_files = list(files)
-    selected_folder_var.set("")
+    selected_folder = ""
     update_label()
 
 def select_folder():
-    global selected_folder
+    global selected_folder, selected_files
     folder = filedialog.askdirectory()
     selected_folder = folder
-    selected_files.clear()
-    selected_folder_var.set(folder)
+    selected_files = []
     update_label()
 
 def update_label():
@@ -57,7 +55,7 @@ def get_target_files():
         return []
 
 def get_save_dir(original_path):
-    if save_option.get() == 1:  # 同じフォルダ
+    if save_option.get() == 1:
         return os.path.dirname(original_path)
     else:
         return filedialog.askdirectory()
@@ -70,7 +68,7 @@ def merge_pdfs():
     try:
         files = get_target_files()
         if not files:
-            raise Exception("ファイル未選択")
+            raise Exception()
 
         writer = PdfWriter()
         for file in files:
@@ -96,7 +94,7 @@ def split_pdfs():
     try:
         files = get_target_files()
         if not files:
-            raise Exception("ファイル未選択")
+            raise Exception()
 
         for file in files:
             reader = PdfReader(file)
@@ -121,9 +119,11 @@ def rotate_pdfs():
     try:
         files = get_target_files()
         if not files:
-            raise Exception("ファイル未選択")
+            raise Exception()
 
-        degree = int(rotate_degree.get() or 0)
+        degree = rotate_option.get()
+        if degree == 0:
+            raise Exception()
 
         for file in files:
             reader = PdfReader(file)
@@ -138,20 +138,20 @@ def rotate_pdfs():
                 return
 
             base = os.path.splitext(os.path.basename(file))[0]
-            output_path = os.path.join(save_dir, f"{base}_Rotate.pdf")
+            output_path = os.path.join(save_dir, f"{base}_Rotate_{degree}.pdf")
 
             with open(output_path, "wb") as f:
                 writer.write(f)
 
         messagebox.showinfo("完了", "回転完了")
     except Exception:
-        messagebox.showerror("エラー", "回転失敗（0扱い）")
+        messagebox.showerror("エラー", "回転失敗（角度未選択は0扱い）")
 
 def extract_text():
     try:
         files = get_target_files()
         if not files:
-            raise Exception("ファイル未選択")
+            raise Exception()
 
         for file in files:
             reader = PdfReader(file)
@@ -181,14 +181,13 @@ def extract_text():
 
 root = Tk()
 root.title("PDF編集アプリ")
-root.geometry("500x400")
+root.geometry("500x420")
 
 Label(root, text="PDF編集ツール", font=("Arial", 16)).pack(pady=10)
 
 Button(root, text="ファイル選択", command=select_files).pack(pady=5)
 Button(root, text="フォルダ選択", command=select_folder).pack(pady=5)
 
-selected_folder_var = StringVar()
 label_selected = Label(root, text="未選択")
 label_selected.pack(pady=5)
 
@@ -197,16 +196,30 @@ save_option = IntVar(value=1)
 Radiobutton(root, text="同じフォルダ", variable=save_option, value=1).pack()
 Radiobutton(root, text="任意のフォルダ", variable=save_option, value=2).pack()
 
-Label(root, text="回転角度（例: 90）").pack()
-rotate_degree = Entry(root)
-rotate_degree.insert(0, "90")
-rotate_degree.pack(pady=5)
+# ==========================
+# 回転トグル
+# ==========================
+
+Label(root, text="回転角度").pack(pady=5)
+
+rotate_option = IntVar(value=0)
+
+frame_rotate = Frame(root)
+frame_rotate.pack()
+
+Radiobutton(frame_rotate, text="90°", variable=rotate_option, value=90, indicatoron=False, width=8).grid(row=0, column=0, padx=5)
+Radiobutton(frame_rotate, text="180°", variable=rotate_option, value=180, indicatoron=False, width=8).grid(row=0, column=1, padx=5)
+Radiobutton(frame_rotate, text="270°", variable=rotate_option, value=270, indicatoron=False, width=8).grid(row=0, column=2, padx=5)
+
+# ==========================
+# 操作ボタン
+# ==========================
 
 Label(root, text="操作").pack(pady=10)
 
-Button(root, text="結合", command=merge_pdfs, width=20).pack(pady=5)
-Button(root, text="分割", command=split_pdfs, width=20).pack(pady=5)
-Button(root, text="回転", command=rotate_pdfs, width=20).pack(pady=5)
-Button(root, text="テキスト抽出", command=extract_text, width=20).pack(pady=5)
+Button(root, text="結合", command=merge_pdfs, width=25).pack(pady=5)
+Button(root, text="分割", command=split_pdfs, width=25).pack(pady=5)
+Button(root, text="回転", command=rotate_pdfs, width=25).pack(pady=5)
+Button(root, text="テキスト抽出", command=extract_text, width=25).pack(pady=5)
 
 root.mainloop()
