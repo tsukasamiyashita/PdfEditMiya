@@ -4,7 +4,8 @@
 機能：分割 / 結合 / 回転 / テキスト抽出
 ・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
 ・フォルダ選択 → 結合のみ実行可
-回転は 90 / 180 / 270 度のトグル選択式
+回転ボタン：
+  左回転（270°） / 上下回転（180°） / 右回転（90°）
 1ファイル完結版
 """
 
@@ -52,12 +53,6 @@ def update_path_display():
         text_paths.insert(END, selected_folder)
 
 def update_button_state(mode=None):
-    """
-    mode:
-      file   → 分割 / 回転 / テキスト抽出 有効
-      folder → 結合 有効
-      None   → 全て無効
-    """
     btn_merge.config(state=DISABLED)
     btn_split.config(state=DISABLED)
     btn_rotate.config(state=DISABLED)
@@ -161,7 +156,7 @@ def rotate_pdfs():
                 return
 
             base = os.path.splitext(os.path.basename(file))[0]
-            output_path = os.path.join(save_dir, f"{base}_Rotate_{degree}.pdf")
+            output_path = os.path.join(save_dir, f"{base}_Rotate.pdf")
 
             with open(output_path, "wb") as f:
                 writer.write(f)
@@ -218,24 +213,31 @@ save_option = IntVar(value=1)
 Radiobutton(root, text="同じフォルダ", variable=save_option, value=1).pack()
 Radiobutton(root, text="任意のフォルダ", variable=save_option, value=2).pack()
 
-Label(root, text="回転角度").pack(pady=5)
+Label(root, text="回転方法").pack(pady=5)
 
 rotate_option = IntVar(value=0)
 frame_rotate = Frame(root)
 frame_rotate.pack()
 
-Radiobutton(frame_rotate, text="90°", variable=rotate_option, value=90,
-            indicatoron=False, width=8).grid(row=0, column=0, padx=5)
-Radiobutton(frame_rotate, text="180°", variable=rotate_option, value=180,
-            indicatoron=False, width=8).grid(row=0, column=1, padx=5)
-Radiobutton(frame_rotate, text="270°", variable=rotate_option, value=270,
-            indicatoron=False, width=8).grid(row=0, column=2, padx=5)
+# ★ 左から：左回転（270°）→ 上下回転（180°）→ 右回転（90°）
+
+Radiobutton(frame_rotate, text="左回転", variable=rotate_option,
+            value=270, indicatoron=False, width=10)\
+    .grid(row=0, column=0, padx=5)
+
+Radiobutton(frame_rotate, text="上下回転", variable=rotate_option,
+            value=180, indicatoron=False, width=10)\
+    .grid(row=0, column=1, padx=5)
+
+Radiobutton(frame_rotate, text="右回転", variable=rotate_option,
+            value=90, indicatoron=False, width=10)\
+    .grid(row=0, column=2, padx=5)
 
 Label(root, text="操作").pack(pady=10)
 
 btn_merge = Button(root, text="結合", command=merge_pdfs, width=25, state=DISABLED)
 btn_split = Button(root, text="分割", command=split_pdfs, width=25, state=DISABLED)
-btn_rotate = Button(root, text="回転", command=rotate_pdfs, width=25, state=DISABLED)
+btn_rotate = Button(root, text="回転実行", command=rotate_pdfs, width=25, state=DISABLED)
 btn_text = Button(root, text="テキスト抽出", command=extract_text, width=25, state=DISABLED)
 
 btn_merge.pack(pady=5)
