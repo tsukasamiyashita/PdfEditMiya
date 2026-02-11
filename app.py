@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 PdfEditMiya
-シンプルPDF編集デスクトップアプリ
+青ベースデザイン（ボタン少し小さめ）
 機能：分割 / 結合 / 回転 / テキスト抽出
 ・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
 ・フォルダ選択 → 結合のみ実行可
@@ -28,14 +28,12 @@ selected_folder = ""
 
 def select_files():
     global selected_files, selected_folder
-    files = filedialog.askopenfilenames(
-        filetypes=[("PDFファイル", "*.pdf")]
-    )
+    files = filedialog.askopenfilenames(filetypes=[("PDFファイル", "*.pdf")])
     if files:
         selected_files = list(files)
         selected_folder = ""
         update_path_display()
-        update_button_state(mode="file")
+        update_button_state("file")
 
 def select_folder():
     global selected_folder, selected_files
@@ -44,14 +42,16 @@ def select_folder():
         selected_folder = folder
         selected_files = []
         update_path_display()
-        update_button_state(mode="folder")
+        update_button_state("folder")
 
 def update_path_display():
+    text_paths.config(state=NORMAL)
     text_paths.delete(1.0, END)
     if selected_files:
         text_paths.insert(END, "\n".join(selected_files))
     elif selected_folder:
         text_paths.insert(END, selected_folder)
+    text_paths.config(state=DISABLED)
 
 def update_button_state(mode=None):
     btn_merge.config(state=DISABLED)
@@ -113,7 +113,7 @@ def merge_pdfs():
         with open(output_path, "wb") as f:
             writer.write(f)
 
-        messagebox.showinfo("完了", "結合完了")
+        messagebox.showinfo("完了", "結合完了しました")
     except Exception:
         messagebox.showerror("エラー", "結合失敗（0扱い）")
 
@@ -134,7 +134,7 @@ def split_pdfs():
                 with open(output_path, "wb") as f:
                     writer.write(f)
 
-        messagebox.showinfo("完了", "分割完了")
+        messagebox.showinfo("完了", "分割完了しました")
     except Exception:
         messagebox.showerror("エラー", "分割失敗（0扱い）")
 
@@ -162,7 +162,7 @@ def rotate_pdfs():
             with open(output_path, "wb") as f:
                 writer.write(f)
 
-        messagebox.showinfo("完了", "回転完了")
+        messagebox.showinfo("完了", "回転完了しました")
     except Exception:
         messagebox.showerror("エラー", "回転失敗（角度未選択は0扱い）")
 
@@ -186,58 +186,103 @@ def extract_text():
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(text)
 
-        messagebox.showinfo("完了", "テキスト抽出完了")
+        messagebox.showinfo("完了", "テキスト抽出完了しました")
     except Exception:
         messagebox.showerror("エラー", "テキスト抽出失敗（0扱い）")
 
 # ==========================
-# UI構築
+# UIデザイン（青ベース）
 # ==========================
+
+PRIMARY = "#1565C0"
+ACCENT = "#1E88E5"
+LIGHT = "#E3F2FD"
+WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("600x700")
-root.minsize(600, 700)
+root.geometry("620x700")
+root.configure(bg=LIGHT)
 
-Label(root, text="PdfEditMiya", font=("Arial", 18)).pack(pady=10)
+Label(root,
+      text="PdfEditMiya",
+      font=("Segoe UI", 20, "bold"),
+      bg=LIGHT,
+      fg=PRIMARY).pack(pady=15)
 
-Button(root, text="ファイル選択", command=select_files, width=25).pack(pady=5)
-Button(root, text="フォルダ選択", command=select_folder, width=25).pack(pady=5)
+# ボタン共通スタイル（少し小さめ）
+btn_style = {
+    "font": ("Segoe UI", 10, "bold"),
+    "bg": PRIMARY,
+    "fg": WHITE,
+    "activebackground": ACCENT,
+    "activeforeground": WHITE,
+    "bd": 0,
+    "width": 22,
+    "height": 1
+}
 
-Label(root, text="選択パス").pack(pady=5)
+Button(root, text="📄 ファイル選択", command=select_files, **btn_style).pack(pady=5)
+Button(root, text="📁 フォルダ選択", command=select_folder, **btn_style).pack(pady=5)
 
-text_paths = Text(root, height=8, width=70)
+Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=8)
+
+text_paths = Text(root, height=6, width=70,
+                  bg=WHITE, fg="#333333",
+                  font=("Consolas", 9),
+                  bd=0)
 text_paths.pack(pady=5)
+text_paths.config(state=DISABLED)
 
-Label(root, text="保存先").pack()
+Label(root, text="保存先", bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=10)
+
 save_option = IntVar(value=1)
-Radiobutton(root, text="同じフォルダ", variable=save_option, value=1).pack()
-Radiobutton(root, text="任意のフォルダ", variable=save_option, value=2).pack()
+Radiobutton(root, text="同じフォルダ",
+            variable=save_option, value=1,
+            bg=LIGHT, selectcolor=WHITE).pack()
 
-Label(root, text="回転方法").pack(pady=5)
+Radiobutton(root, text="任意のフォルダ",
+            variable=save_option, value=2,
+            bg=LIGHT, selectcolor=WHITE).pack()
+
+Label(root, text="回転方法", bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=12)
 
 rotate_option = IntVar(value=0)
-frame_rotate = Frame(root)
+frame_rotate = Frame(root, bg=LIGHT)
 frame_rotate.pack()
 
-Radiobutton(frame_rotate, text="左回転", variable=rotate_option,
-            value=270, indicatoron=False, width=10)\
-    .grid(row=0, column=0, padx=5)
+toggle_style = {
+    "indicatoron": False,
+    "width": 9,
+    "font": ("Segoe UI", 9, "bold"),
+    "bg": PRIMARY,
+    "fg": WHITE,
+    "selectcolor": ACCENT,
+    "bd": 0
+}
 
-Radiobutton(frame_rotate, text="上下回転", variable=rotate_option,
-            value=180, indicatoron=False, width=10)\
-    .grid(row=0, column=1, padx=5)
+Radiobutton(frame_rotate, text="左回転",
+            variable=rotate_option, value=270,
+            **toggle_style).grid(row=0, column=0, padx=5)
 
-Radiobutton(frame_rotate, text="右回転", variable=rotate_option,
-            value=90, indicatoron=False, width=10)\
-    .grid(row=0, column=2, padx=5)
+Radiobutton(frame_rotate, text="上下回転",
+            variable=rotate_option, value=180,
+            **toggle_style).grid(row=0, column=1, padx=5)
 
-Label(root, text="操作").pack(pady=10)
+Radiobutton(frame_rotate, text="右回転",
+            variable=rotate_option, value=90,
+            **toggle_style).grid(row=0, column=2, padx=5)
 
-btn_merge = Button(root, text="結合", command=merge_pdfs, width=25, state=DISABLED)
-btn_split = Button(root, text="分割", command=split_pdfs, width=25, state=DISABLED)
-btn_rotate = Button(root, text="回転実行", command=rotate_pdfs, width=25, state=DISABLED)
-btn_text = Button(root, text="テキスト抽出", command=extract_text, width=25, state=DISABLED)
+Label(root, text="操作", bg=LIGHT, fg=PRIMARY,
+      font=("Segoe UI", 10, "bold")).pack(pady=15)
+
+btn_merge = Button(root, text="🔗 結合", command=merge_pdfs, state=DISABLED, **btn_style)
+btn_split = Button(root, text="✂ 分割", command=split_pdfs, state=DISABLED, **btn_style)
+btn_rotate = Button(root, text="🔄 回転実行", command=rotate_pdfs, state=DISABLED, **btn_style)
+btn_text = Button(root, text="📝 テキスト抽出", command=extract_text, state=DISABLED, **btn_style)
 
 btn_merge.pack(pady=5)
 btn_split.pack(pady=5)
