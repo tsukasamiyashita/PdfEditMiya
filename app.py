@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 PdfEditMiya
-青ベースデザイン（自動で完了画面3秒後に閉じる）
+青ベースデザイン
+・処理実行中は「実行中画面」を表示
+・完了画面は3秒後に自動で閉じる
 機能：分割 / 結合 / 回転 / テキスト抽出
-・ファイル選択 → 分割 / 回転 / テキスト抽出が実行可
-・フォルダ選択 → 結合のみ実行可
-回転ボタン：
-  左回転（270°） / 上下回転（180°） / 右回転（90°）
-1ファイル完結版
 """
 
 import os
+import threading
 from tkinter import *
 from tkinter import filedialog
 from PyPDF2 import PdfReader, PdfWriter
@@ -21,10 +19,34 @@ from PyPDF2 import PdfReader, PdfWriter
 
 selected_files = []
 selected_folder = ""
+processing_popup = None
 
 # ==========================
-# 完了ポップアップ（3秒自動クローズ）
+# ポップアップ関連
 # ==========================
+
+def show_processing(message="処理実行中..."):
+    global processing_popup
+    processing_popup = Toplevel(root)
+    processing_popup.title("実行中")
+    processing_popup.geometry("300x120")
+    processing_popup.resizable(False, False)
+    processing_popup.configure(bg="#E3F2FD")
+
+    Label(processing_popup,
+          text=message,
+          bg="#E3F2FD",
+          fg="#1565C0",
+          font=("Segoe UI", 11, "bold")).pack(expand=True)
+
+    processing_popup.grab_set()
+    processing_popup.update()
+
+def close_processing():
+    global processing_popup
+    if processing_popup:
+        processing_popup.destroy()
+        processing_popup = None
 
 def show_auto_close_message(title, message, is_error=False):
     popup = Toplevel(root)
@@ -42,7 +64,6 @@ def show_auto_close_message(title, message, is_error=False):
           fg=fg_color,
           font=("Segoe UI", 10, "bold")).pack(expand=True)
 
-    # 3秒後に閉じる
     popup.after(3000, popup.destroy)
 
 # ==========================
@@ -111,110 +132,107 @@ def get_save_dir(original_path):
         return filedialog.askdirectory()
 
 # ==========================
+# 実行ラッパー（スレッド対応）
+# ==========================
+
+def run_with_loading(task_func):
+    def task():
+        try:
+            show_processing()
+            task_func()
+            close_processing()
+            show_auto_close_message("完了", "処理が完了しました")
+        except Exception:
+            close_processing()
+            show_auto_close_message("エラー", "処理失敗（0扱い）", True)
+
+    threading.Thread(target=task).start()
+
+# ==========================
 # PDF操作
 # ==========================
 
 def merge_pdfs():
-    try:
-        files = get_target_files()
-        if not files:
-            raise Exception()
+    files = get_target_files()
+    if not files:
+        raise Exception()
 
-        writer = PdfWriter()
-        for file in files:
-            reader = PdfReader(file)
-            for page in reader.pages:
-                writer.add_page(page)
+    writer = PdfWriter()
+    for file in files:
+        reader = PdfReader(file)
+        for page in reader.pages:
+            writer.add_page(page)
 
-        save_dir = get_save_dir(files[0])
+    save_dir = get_save_dir(files[0])
+    if not save_dir:
+        return
+
+    base = os.path.basename(selected_folder)
+    output_path = os.path.join(save_dir, base + "_Merge.pdf")
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+def split_pdfs():
+    for file in selected_files:
+        reader = PdfReader(file)
+        save_dir = get_save_dir(file)
         if not save_dir:
             return
 
-        base = os.path.basename(selected_folder)
-        output_path = os.path.join(save_dir, base + "_Merge.pdf")
+        base = os.path.splitext(os.path.basename(file))[0]
+
+        for i, page in enumerate(reader.pages):
+            writer = PdfWriter()
+            writer.add_page(page)
+            output_path = os.path.join(save_dir, f"{base}_Split_{i+1}.pdf")
+            with open(output_path, "wb") as f:
+                writer.write(f)
+
+def rotate_pdfs():
+    degree = rotate_option.get()
+    if degree == 0:
+        raise Exception()
+
+    for file in selected_files:
+        reader = PdfReader(file)
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            page.rotate(degree)
+            writer.add_page(page)
+
+        save_dir = get_save_dir(file)
+        if not save_dir:
+            return
+
+        base = os.path.splitext(os.path.basename(file))[0]
+        output_path = os.path.join(save_dir, f"{base}_Rotate.pdf")
 
         with open(output_path, "wb") as f:
             writer.write(f)
 
-        show_auto_close_message("完了", "結合完了しました")
-    except Exception:
-        show_auto_close_message("エラー", "結合失敗（0扱い）", True)
-
-def split_pdfs():
-    try:
-        for file in selected_files:
-            reader = PdfReader(file)
-            save_dir = get_save_dir(file)
-            if not save_dir:
-                return
-
-            base = os.path.splitext(os.path.basename(file))[0]
-
-            for i, page in enumerate(reader.pages):
-                writer = PdfWriter()
-                writer.add_page(page)
-                output_path = os.path.join(save_dir, f"{base}_Split_{i+1}.pdf")
-                with open(output_path, "wb") as f:
-                    writer.write(f)
-
-        show_auto_close_message("完了", "分割完了しました")
-    except Exception:
-        show_auto_close_message("エラー", "分割失敗（0扱い）", True)
-
-def rotate_pdfs():
-    try:
-        degree = rotate_option.get()
-        if degree == 0:
-            raise Exception()
-
-        for file in selected_files:
-            reader = PdfReader(file)
-            writer = PdfWriter()
-
-            for page in reader.pages:
-                page.rotate(degree)
-                writer.add_page(page)
-
-            save_dir = get_save_dir(file)
-            if not save_dir:
-                return
-
-            base = os.path.splitext(os.path.basename(file))[0]
-            output_path = os.path.join(save_dir, f"{base}_Rotate.pdf")
-
-            with open(output_path, "wb") as f:
-                writer.write(f)
-
-        show_auto_close_message("完了", "回転完了しました")
-    except Exception:
-        show_auto_close_message("エラー", "回転失敗（角度未選択は0扱い）", True)
-
 def extract_text():
-    try:
-        for file in selected_files:
-            reader = PdfReader(file)
-            text = ""
+    for file in selected_files:
+        reader = PdfReader(file)
+        text = ""
 
-            for page in reader.pages:
-                t = page.extract_text()
-                text += t if t else ""
+        for page in reader.pages:
+            t = page.extract_text()
+            text += t if t else ""
 
-            save_dir = get_save_dir(file)
-            if not save_dir:
-                return
+        save_dir = get_save_dir(file)
+        if not save_dir:
+            return
 
-            base = os.path.splitext(os.path.basename(file))[0]
-            output_path = os.path.join(save_dir, f"{base}_Text.txt")
+        base = os.path.splitext(os.path.basename(file))[0]
+        output_path = os.path.join(save_dir, f"{base}_Text.txt")
 
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(text)
-
-        show_auto_close_message("完了", "テキスト抽出完了しました")
-    except Exception:
-        show_auto_close_message("エラー", "テキスト抽出失敗（0扱い）", True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(text)
 
 # ==========================
-# UIデザイン（青ベース）
+# UIデザイン
 # ==========================
 
 PRIMARY = "#1565C0"
@@ -301,10 +319,21 @@ Radiobutton(frame_rotate, text="右回転",
 Label(root, text="操作", bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=15)
 
-btn_merge = Button(root, text="🔗 結合", command=merge_pdfs, state=DISABLED, **btn_style)
-btn_split = Button(root, text="✂ 分割", command=split_pdfs, state=DISABLED, **btn_style)
-btn_rotate = Button(root, text="🔄 回転実行", command=rotate_pdfs, state=DISABLED, **btn_style)
-btn_text = Button(root, text="📝 テキスト抽出", command=extract_text, state=DISABLED, **btn_style)
+btn_merge = Button(root, text="🔗 結合",
+                   command=lambda: run_with_loading(merge_pdfs),
+                   state=DISABLED, **btn_style)
+
+btn_split = Button(root, text="✂ 分割",
+                   command=lambda: run_with_loading(split_pdfs),
+                   state=DISABLED, **btn_style)
+
+btn_rotate = Button(root, text="🔄 回転実行",
+                    command=lambda: run_with_loading(rotate_pdfs),
+                    state=DISABLED, **btn_style)
+
+btn_text = Button(root, text="📝 テキスト抽出",
+                  command=lambda: run_with_loading(extract_text),
+                  state=DISABLED, **btn_style)
 
 btn_merge.pack(pady=5)
 btn_split.pack(pady=5)
