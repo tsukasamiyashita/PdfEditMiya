@@ -3,6 +3,7 @@
 シンプルPDF編集デスクトップアプリ
 機能：分割 / 結合 / 回転 / テキスト抽出
 回転は 90 / 180 / 270 度のトグル選択式
+選択したファイル／フォルダのパスを表示
 1ファイル完結版
 """
 
@@ -23,24 +24,29 @@ def select_files():
     files = filedialog.askopenfilenames(
         filetypes=[("PDFファイル", "*.pdf")]
     )
-    selected_files = list(files)
-    selected_folder = ""
-    update_label()
+    if files:
+        selected_files = list(files)
+        selected_folder = ""
+        update_path_display()
 
 def select_folder():
     global selected_folder, selected_files
     folder = filedialog.askdirectory()
-    selected_folder = folder
-    selected_files = []
-    update_label()
+    if folder:
+        selected_folder = folder
+        selected_files = []
+        update_path_display()
 
-def update_label():
+def update_path_display():
     if selected_files:
-        label_selected.config(text=f"{len(selected_files)}個のPDFを選択中")
+        paths = "\n".join(selected_files)
+        text_paths.delete(1.0, END)
+        text_paths.insert(END, paths)
     elif selected_folder:
-        label_selected.config(text=f"フォルダ選択中: {selected_folder}")
+        text_paths.delete(1.0, END)
+        text_paths.insert(END, selected_folder)
     else:
-        label_selected.config(text="未選択")
+        text_paths.delete(1.0, END)
 
 def get_target_files():
     if selected_files:
@@ -181,27 +187,23 @@ def extract_text():
 
 root = Tk()
 root.title("PDF編集アプリ")
-
-# ★ すべてのボタンが確実に表示されるサイズ
-root.geometry("520x650")
-root.minsize(520, 650)
+root.geometry("600x700")
+root.minsize(600, 700)
 
 Label(root, text="PDF編集ツール", font=("Arial", 16)).pack(pady=10)
 
-Button(root, text="ファイル選択", command=select_files).pack(pady=5)
-Button(root, text="フォルダ選択", command=select_folder).pack(pady=5)
+Button(root, text="ファイル選択", command=select_files, width=25).pack(pady=5)
+Button(root, text="フォルダ選択", command=select_folder, width=25).pack(pady=5)
 
-label_selected = Label(root, text="未選択")
-label_selected.pack(pady=5)
+Label(root, text="選択パス").pack(pady=5)
+
+text_paths = Text(root, height=10, width=70)
+text_paths.pack(pady=5)
 
 Label(root, text="保存先").pack()
 save_option = IntVar(value=1)
 Radiobutton(root, text="同じフォルダ", variable=save_option, value=1).pack()
 Radiobutton(root, text="任意のフォルダ", variable=save_option, value=2).pack()
-
-# ==========================
-# 回転トグル
-# ==========================
 
 Label(root, text="回転角度").pack(pady=5)
 
@@ -213,10 +215,6 @@ frame_rotate.pack()
 Radiobutton(frame_rotate, text="90°", variable=rotate_option, value=90, indicatoron=False, width=8).grid(row=0, column=0, padx=5)
 Radiobutton(frame_rotate, text="180°", variable=rotate_option, value=180, indicatoron=False, width=8).grid(row=0, column=1, padx=5)
 Radiobutton(frame_rotate, text="270°", variable=rotate_option, value=270, indicatoron=False, width=8).grid(row=0, column=2, padx=5)
-
-# ==========================
-# 操作ボタン
-# ==========================
 
 Label(root, text="操作").pack(pady=10)
 
