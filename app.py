@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya（保存先 初期＝同じフォルダ）
+PdfEditMiya
 ・青ベースUI
-・保存先は初期状態で「同じフォルダ」
-・任意保存先は事前選択可能（未選択なら実行時に選択）
-・回転はラジオボタン（初期：左回転）
+・保存先 初期＝同じフォルダ
+・任意保存先は事前選択可能
+・保存先選択をキャンセルした場合は完了画面を出さない
+・回転ラジオ（初期：左回転）
 ・処理中ポップアップ表示
 ・完了は3秒後に自動クローズ
 """
@@ -23,7 +24,8 @@ selected_files = []
 selected_folder = ""
 current_mode = None
 processing_popup = None
-preset_save_dir = ""   # 任意保存先
+preset_save_dir = ""
+cancelled = False  # ★ 保存先キャンセル検知用
 
 # ==========================
 # ポップアップ
@@ -136,12 +138,11 @@ def get_target_files():
     return []
 
 def get_save_dir(original_path):
-    # ★ 初期は同じフォルダ
+    global preset_save_dir, cancelled
+
     if save_option.get() == 1:
         return os.path.dirname(original_path)
 
-    # ★ 任意フォルダ選択
-    global preset_save_dir
     if preset_save_dir:
         return preset_save_dir
 
@@ -151,15 +152,25 @@ def get_save_dir(original_path):
         save_dir_label.config(text=f"保存先: {preset_save_dir}")
         return folder
 
+    cancelled = True   # ★ キャンセル検知
     return None
 
 def run_task(func):
     def task():
+        global cancelled
+        cancelled = False
+
         try:
             show_processing()
             func()
             close_processing()
+
+            # ★ キャンセル時は完了表示しない
+            if cancelled:
+                return
+
             auto_close_message("完了", "処理が完了しました")
+
         except Exception:
             close_processing()
             auto_close_message("エラー", "処理失敗（0扱い）", True)
@@ -245,8 +256,8 @@ WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("600x780")
-root.minsize(600, 780)
+root.geometry("600x760")
+root.minsize(600, 760)
 root.configure(bg=LIGHT)
 
 Label(root, text="PdfEditMiya",
@@ -282,15 +293,11 @@ text_paths = Text(root, height=5, width=70,
 text_paths.pack()
 text_paths.config(state=DISABLED)
 
-# ==========================
-# 保存先設定
-# ==========================
-
 Label(root, text="保存先設定",
       bg=LIGHT, fg=PRIMARY,
       font=("Segoe UI", 10, "bold")).pack(pady=8)
 
-save_option = IntVar(value=1)  # ★ 初期＝同じフォルダ
+save_option = IntVar(value=1)
 
 Radiobutton(root, text="同じフォルダ（初期）",
             variable=save_option, value=1,
@@ -307,10 +314,6 @@ save_dir_label = Label(root,
                        text="保存先: 同じフォルダ",
                        bg=LIGHT, font=("Segoe UI", 9))
 save_dir_label.pack(pady=3)
-
-# ==========================
-# 回転
-# ==========================
 
 Label(root, text="回転方法",
       bg=LIGHT, fg=PRIMARY,
@@ -329,10 +332,6 @@ Radiobutton(root, text="上下回転（180°）",
 Radiobutton(root, text="右回転（90°）",
             variable=rotate_option, value=90,
             bg=LIGHT).pack()
-
-# ==========================
-# 操作
-# ==========================
 
 Label(root, text="操作",
       bg=LIGHT, fg=PRIMARY,
