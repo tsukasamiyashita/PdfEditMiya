@@ -3,8 +3,10 @@
 PdfEditMiya
 青ベースデザイン
 ・ファイル選択 / フォルダ選択が分かりやすい表示
+・回転はラジオボタン（初期：左回転）
 ・処理中は実行中画面表示
 ・完了画面は3秒後に自動で閉じる
+・全ボタンが確実に表示されるウィンドウサイズ
 機能：分割 / 結合 / 回転 / テキスト抽出
 """
 
@@ -31,7 +33,7 @@ def show_processing(message="処理実行中..."):
     global processing_popup
     processing_popup = Toplevel(root)
     processing_popup.title("実行中")
-    processing_popup.geometry("300x120")
+    processing_popup.geometry("320x130")
     processing_popup.resizable(False, False)
     processing_popup.configure(bg="#E3F2FD")
 
@@ -53,7 +55,7 @@ def close_processing():
 def show_auto_close_message(title, message, is_error=False):
     popup = Toplevel(root)
     popup.title(title)
-    popup.geometry("300x120")
+    popup.geometry("320x130")
     popup.resizable(False, False)
 
     bg_color = "#E3F2FD" if not is_error else "#FFEBEE"
@@ -208,8 +210,6 @@ def split_pdfs():
 
 def rotate_pdfs():
     degree = rotate_option.get()
-    if degree == 0:
-        raise Exception()
 
     for file in selected_files:
         reader = PdfReader(file)
@@ -258,12 +258,16 @@ WHITE = "#FFFFFF"
 
 root = Tk()
 root.title("PdfEditMiya")
-root.geometry("640x720")
+
+# ★ 全ボタンが確実に表示されるサイズ
+root.geometry("700x880")
+root.minsize(700, 880)
+
 root.configure(bg=LIGHT)
 
 Label(root,
       text="PdfEditMiya",
-      font=("Segoe UI", 20, "bold"),
+      font=("Segoe UI", 22, "bold"),
       bg=LIGHT,
       fg=PRIMARY).pack(pady=15)
 
@@ -271,8 +275,8 @@ mode_label = Label(root,
                    text="現在の選択モード：未選択",
                    bg=LIGHT,
                    fg="#666666",
-                   font=("Segoe UI", 11, "bold"))
-mode_label.pack(pady=5)
+                   font=("Segoe UI", 12, "bold"))
+mode_label.pack(pady=8)
 
 btn_style = {
     "font": ("Segoe UI", 10, "bold"),
@@ -281,66 +285,59 @@ btn_style = {
     "activebackground": "#1E88E5",
     "activeforeground": WHITE,
     "bd": 0,
-    "width": 22,
+    "width": 24,
     "height": 1
 }
 
-Button(root, text="📄 ファイル選択", command=select_files, **btn_style).pack(pady=5)
-Button(root, text="📁 フォルダ選択", command=select_folder, **btn_style).pack(pady=5)
+Button(root, text="📄 ファイル選択", command=select_files, **btn_style).pack(pady=6)
+Button(root, text="📁 フォルダ選択", command=select_folder, **btn_style).pack(pady=6)
 
 Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 10, "bold")).pack(pady=8)
+      font=("Segoe UI", 11, "bold")).pack(pady=10)
 
-text_paths = Text(root, height=6, width=75,
+text_paths = Text(root, height=8, width=85,
                   bg=WHITE, fg="#333333",
                   font=("Consolas", 9),
                   bd=0)
-text_paths.pack(pady=5)
+text_paths.pack(pady=6)
 text_paths.config(state=DISABLED)
 
 Label(root, text="保存先", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 10, "bold")).pack(pady=10)
+      font=("Segoe UI", 11, "bold")).pack(pady=12)
 
 save_option = IntVar(value=1)
 Radiobutton(root, text="同じフォルダ",
             variable=save_option, value=1,
-            bg=LIGHT, selectcolor=WHITE).pack()
+            bg=LIGHT, selectcolor=WHITE,
+            font=("Segoe UI", 10)).pack()
 
 Radiobutton(root, text="任意のフォルダ",
             variable=save_option, value=2,
-            bg=LIGHT, selectcolor=WHITE).pack()
+            bg=LIGHT, selectcolor=WHITE,
+            font=("Segoe UI", 10)).pack()
 
 Label(root, text="回転方法", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 10, "bold")).pack(pady=12)
+      font=("Segoe UI", 11, "bold")).pack(pady=15)
 
-rotate_option = IntVar(value=0)
-frame_rotate = Frame(root, bg=LIGHT)
-frame_rotate.pack()
+rotate_option = IntVar(value=270)
 
-toggle_style = {
-    "indicatoron": False,
-    "width": 9,
-    "font": ("Segoe UI", 9, "bold"),
-    "bg": PRIMARY,
-    "fg": WHITE,
-    "selectcolor": "#1E88E5",
-    "bd": 0
-}
-
-Radiobutton(frame_rotate, text="左回転",
+Radiobutton(root, text="左回転（270°）",
             variable=rotate_option, value=270,
-            **toggle_style).grid(row=0, column=0, padx=5)
+            bg=LIGHT, selectcolor=WHITE,
+            font=("Segoe UI", 11)).pack(pady=3)
 
-Radiobutton(frame_rotate, text="上下回転",
+Radiobutton(root, text="上下回転（180°）",
             variable=rotate_option, value=180,
-            **toggle_style).grid(row=0, column=1, padx=5)
+            bg=LIGHT, selectcolor=WHITE,
+            font=("Segoe UI", 11)).pack(pady=3)
 
-Radiobutton(frame_rotate, text="右回転",
+Radiobutton(root, text="右回転（90°）",
             variable=rotate_option, value=90,
-            **toggle_style).grid(row=0, column=2, padx=5)
+            bg=LIGHT, selectcolor=WHITE,
+            font=("Segoe UI", 11)).pack(pady=3)
 
 Label(root, text="操作", bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 10, "bold")).pack(pady=15)
+      font=("Segoe UI", 12, "bold")).pack(pady=20)
 
 btn_merge = Button(root, text="🔗 結合",
                    command=lambda: run_with_loading(merge_pdfs),
@@ -358,9 +355,9 @@ btn_text = Button(root, text="📝 テキスト抽出",
                   command=lambda: run_with_loading(extract_text),
                   state=DISABLED, **btn_style)
 
-btn_merge.pack(pady=5)
-btn_split.pack(pady=5)
-btn_rotate.pack(pady=5)
-btn_text.pack(pady=5)
+btn_merge.pack(pady=6)
+btn_split.pack(pady=6)
+btn_rotate.pack(pady=6)
+btn_text.pack(pady=6)
 
 root.mainloop()
