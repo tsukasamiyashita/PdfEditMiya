@@ -3,8 +3,9 @@
 PdfEditMiya
 ・青ベースUI
 ・保存先 初期＝同じフォルダ
-・任意保存先は事前選択可能
-・保存先選択をキャンセルした場合は完了画面を出さない
+・任意フォルダ選択時は保存先未選択へ
+・「同じフォルダ（初期）」を選択し直したら表示も同じフォルダへ戻す
+・保存先キャンセル時は完了画面を出さない
 ・回転ラジオ（初期：左回転）
 ・処理中ポップアップ表示
 ・完了は3秒後に自動クローズ
@@ -25,7 +26,7 @@ selected_folder = ""
 current_mode = None
 processing_popup = None
 preset_save_dir = ""
-cancelled = False  # ★ 保存先キャンセル検知用
+cancelled = False
 
 # ==========================
 # ポップアップ
@@ -96,6 +97,22 @@ def select_save_dir():
         preset_save_dir = folder
         save_dir_label.config(text=f"保存先: {preset_save_dir}")
 
+def on_save_option_change():
+    """
+    保存先ラジオ切替時の処理
+    """
+    global preset_save_dir
+
+    # 任意フォルダ選択時 → 未選択へ
+    if save_option.get() == 2:
+        preset_save_dir = ""
+        save_dir_label.config(text="保存先: 未選択")
+
+    # 同じフォルダを選択し直した場合 → 表示を戻す
+    if save_option.get() == 1:
+        preset_save_dir = ""
+        save_dir_label.config(text="保存先: 同じフォルダ")
+
 def update_ui():
     if current_mode == "file":
         mode_label.config(text="📄 ファイル選択中", fg="#1565C0")
@@ -152,20 +169,18 @@ def get_save_dir(original_path):
         save_dir_label.config(text=f"保存先: {preset_save_dir}")
         return folder
 
-    cancelled = True   # ★ キャンセル検知
+    cancelled = True
     return None
 
 def run_task(func):
     def task():
         global cancelled
         cancelled = False
-
         try:
             show_processing()
             func()
             close_processing()
 
-            # ★ キャンセル時は完了表示しない
             if cancelled:
                 return
 
@@ -301,10 +316,12 @@ save_option = IntVar(value=1)
 
 Radiobutton(root, text="同じフォルダ（初期）",
             variable=save_option, value=1,
+            command=on_save_option_change,
             bg=LIGHT).pack()
 
 Radiobutton(root, text="任意のフォルダ",
             variable=save_option, value=2,
+            command=on_save_option_change,
             bg=LIGHT).pack()
 
 Button(root, text="📂 任意保存先を事前選択",
