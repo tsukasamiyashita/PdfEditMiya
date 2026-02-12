@@ -1,18 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya - 完全安定統合版
-
-・PDF結合
-・PDF分割
-・PDF回転
-・Text抽出
-・Excel変換（罫線・列幅再現）
-・JPEG変換
-・PNG変換
-・保存先指定
-・進捗バー
-・処理中ポップアップ
-・完了3秒自動クローズ
+PdfEditMiya - 完全安定統合版 (フォルダ一括処理対応)
 """
 
 import os
@@ -79,16 +67,17 @@ def run_task(func):
     try:
         files = get_target_files()
         if not files:
-            raise Exception()
+            return
 
         show_processing(len(files))
-        func()
+        func(files) # ターゲットリストを関数に渡す
         close_processing()
 
         if not cancelled:
             show_message("✅ 完了", SUCCESS)
 
-    except Exception:
+    except Exception as e:
+        print(f"Error: {e}")
         close_processing()
         show_message("❌ エラー", ERROR)
 
@@ -201,20 +190,19 @@ def select_folder():
         update_ui()
 
 def get_target_files():
-    if selected_files:
+    if current_mode == "file":
         return selected_files
-    if selected_folder:
+    if current_mode == "folder" and selected_folder:
         return [os.path.join(selected_folder, f)
                 for f in os.listdir(selected_folder)
                 if f.lower().endswith(".pdf")]
     return []
 
 # ==============================
-# PDF操作
+# PDF操作 (一括処理対応版)
 # ==============================
 
-def merge_pdfs():
-    files = get_target_files()
+def merge_pdfs(files):
     writer = PdfWriter()
     for i, f in enumerate(files, 1):
         reader = PdfReader(f)
@@ -223,135 +211,95 @@ def merge_pdfs():
         update_progress(i)
 
     save_dir = get_save_dir(files[0])
-    if not save_dir:
-        return
+    if not save_dir: return
 
-    name = os.path.basename(selected_folder)
-    with open(os.path.join(save_dir, name + "_Merge.pdf"), "wb") as out:
+    # フォルダ名または最初のファイル名をベースにする
+    base_name = os.path.basename(selected_folder) if selected_folder else "Merged"
+    with open(os.path.join(save_dir, f"{base_name}_Merge.pdf"), "wb") as out:
         writer.write(out)
 
-def split_pdfs():
-    for i, f in enumerate(selected_files, 1):
+def split_pdfs(files):
+    for i, f in enumerate(files, 1):
         reader = PdfReader(f)
         save_dir = get_save_dir(f)
-        if not save_dir:
-            return
+        if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         for n, p in enumerate(reader.pages):
             writer = PdfWriter()
             writer.add_page(p)
-            with open(os.path.join(save_dir,
-                     f"{base}_Split_{n+1}.pdf"), "wb") as out:
+            with open(os.path.join(save_dir, f"{base}_Split_{n+1}.pdf"), "wb") as out:
                 writer.write(out)
         update_progress(i)
 
-def rotate_pdfs():
+def rotate_pdfs(files):
     deg = rotate_option.get()
-    for i, f in enumerate(selected_files, 1):
+    for i, f in enumerate(files, 1):
         reader = PdfReader(f)
         writer = PdfWriter()
         for p in reader.pages:
             p.rotate(deg)
             writer.add_page(p)
         save_dir = get_save_dir(f)
-        if not save_dir:
-            return
+        if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
-        with open(os.path.join(save_dir,
-                 f"{base}_Rotate.pdf"), "wb") as out:
+        with open(os.path.join(save_dir, f"{base}_Rotate.pdf"), "wb") as out:
             writer.write(out)
         update_progress(i)
 
-def extract_text():
-    for i, f in enumerate(selected_files, 1):
+def extract_text(files):
+    for i, f in enumerate(files, 1):
         reader = PdfReader(f)
         text = ""
         for p in reader.pages:
             t = p.extract_text()
             text += t if t else ""
         save_dir = get_save_dir(f)
-        if not save_dir:
-            return
+        if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
-        with open(os.path.join(save_dir,
-                 f"{base}_Text.txt"), "w", encoding="utf-8") as out:
+        with open(os.path.join(save_dir, f"{base}_Text.txt"), "w", encoding="utf-8") as out:
             out.write(text)
         update_progress(i)
 
-# ==============================
-# Excel変換（罫線＋列幅再現）
-# ==============================
-
-def convert_to_excel():
+def convert_to_excel(files):
     thin = Side(border_style="thin", color="000000")
-
-    for i, pdf_path in enumerate(selected_files, 1):
+    for i, pdf_path in enumerate(files, 1):
         wb = Workbook()
         wb.remove(wb.active)
-
         with pdfplumber.open(pdf_path) as pdf:
             for page_i, page in enumerate(pdf.pages):
                 tables = page.extract_tables()
-
-                if not tables:
-                    continue
-
+                if not tables: continue
                 ws = wb.create_sheet(f"Page_{page_i+1}")
                 row_offset = 1
-
                 for table in tables:
                     for r, row in enumerate(table):
                         for c, cell in enumerate(row):
                             value = cell.strip() if cell else ""
-                            excel_cell = ws.cell(
-                                row=row_offset + r,
-                                column=c + 1,
-                                value=value
-                            )
-                            excel_cell.alignment = Alignment(
-                                horizontal="center",
-                                vertical="center"
-                            )
-                            excel_cell.border = Border(
-                                left=thin, right=thin,
-                                top=thin, bottom=thin
-                            )
+                            excel_cell = ws.cell(row=row_offset + r, column=c + 1, value=value)
+                            excel_cell.alignment = Alignment(horizontal="center", vertical="center")
+                            excel_cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
                     row_offset += len(table) + 2
-
-                # 列幅自動調整
                 for col in ws.columns:
                     max_length = 0
                     col_letter = get_column_letter(col[0].column)
                     for cell in col:
-                        if cell.value:
-                            max_length = max(max_length,
-                                             len(str(cell.value)))
+                        if cell.value: max_length = max(max_length, len(str(cell.value)))
                     ws.column_dimensions[col_letter].width = max_length + 4
-
         save_dir = get_save_dir(pdf_path)
-        if not save_dir:
-            return
-
+        if not save_dir: return
         base = os.path.splitext(os.path.basename(pdf_path))[0]
-        wb.save(os.path.join(save_dir,
-                             f"{base}_Excel.xlsx"))
+        wb.save(os.path.join(save_dir, f"{base}_Excel.xlsx"))
         update_progress(i)
 
-# ==============================
-# 画像変換
-# ==============================
-
-def convert_to_image(ext):
-    for i, f in enumerate(selected_files, 1):
+def convert_to_image_task(files, ext):
+    for i, f in enumerate(files, 1):
         doc = fitz.open(f)
         save_dir = get_save_dir(f)
-        if not save_dir:
-            return
+        if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         for n, page in enumerate(doc):
             pix = page.get_pixmap(dpi=200)
-            pix.save(os.path.join(save_dir,
-                     f"{base}_{n+1}.{ext}"))
+            pix.save(os.path.join(save_dir, f"{base}_{n+1}.{ext}"))
         update_progress(i)
 
 # ==============================
@@ -368,121 +316,65 @@ def update_ui():
     if current_mode == "file":
         path_text = "\n".join(selected_files)
     elif current_mode == "folder":
-        path_text = selected_folder
+        path_text = f"フォルダ: {selected_folder}"
     else:
         path_text = "未選択"
 
     path_label.config(text=path_text)
 
-    set_button_state(btn_merge, current_mode == "folder")
-    set_button_state(btn_split, current_mode == "file")
-    set_button_state(btn_rotate, current_mode == "file")
-    set_button_state(btn_text, current_mode == "file")
-    set_button_state(btn_excel, current_mode == "file")
-    set_button_state(btn_jpeg, current_mode == "file")
-    set_button_state(btn_png, current_mode == "file")
+    # フォルダ・ファイルどちらかが選ばれていればボタンを有効化
+    is_selected = (current_mode is not None)
+    
+    set_button_state(btn_merge, current_mode == "folder") # 結合のみフォルダ時限定
+    set_button_state(btn_split, is_selected)
+    set_button_state(btn_rotate, is_selected)
+    set_button_state(btn_text, is_selected)
+    set_button_state(btn_excel, is_selected)
+    set_button_state(btn_jpeg, is_selected)
+    set_button_state(btn_png, is_selected)
 
 # ==============================
-# UI構築（元レイアウト維持）
+# UI構築
 # ==============================
 
-Label(root, text=APP_TITLE,
-      bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 15, "bold")).pack(pady=8)
+Label(root, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 15, "bold")).pack(pady=8)
 
 file_frame = Frame(root, bg=LIGHT)
 file_frame.pack(pady=5)
 
-Button(file_frame, text="📄 ファイル選択",
-       command=select_files, width=22).grid(row=0, column=0, padx=5)
+Button(file_frame, text="📄 ファイル選択", command=select_files, width=22).grid(row=0, column=0, padx=5)
+Button(file_frame, text="📁 フォルダ選択", command=select_folder, width=22).grid(row=0, column=1, padx=5)
 
-Button(file_frame, text="📁 フォルダ選択",
-       command=select_folder, width=22).grid(row=0, column=1, padx=5)
-
-Label(root, text="選択パス",
-      bg=LIGHT, fg=PRIMARY,
-      font=("Segoe UI", 10, "bold")).pack(pady=5)
-
-path_label = Label(root, text="未選択",
-                   bg=LIGHT, wraplength=520,
-                   justify="left")
+Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold")).pack(pady=5)
+path_label = Label(root, text="未選択", bg=LIGHT, wraplength=520, justify="left")
 path_label.pack(pady=2)
 
-save_frame = LabelFrame(root, text="保存先設定",
-                        bg=LIGHT, fg=PRIMARY,
-                        font=("Segoe UI", 10, "bold"),
-                        padx=5, pady=5)
+save_frame = LabelFrame(root, text="保存先設定", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
 save_frame.pack(pady=5, fill="x", padx=10)
 
-Radiobutton(save_frame,
-            text="同じフォルダ（初期）",
-            variable=save_option,
-            value=1,
-            command=on_save_change,
-            bg=LIGHT).pack(anchor="w")
-
-Radiobutton(save_frame,
-            text="任意フォルダ",
-            variable=save_option,
-            value=2,
-            command=on_save_change,
-            bg=LIGHT).pack(anchor="w")
-
-Button(save_frame, text="📂 保存先を選択",
-       command=select_save_dir,
-       width=22).pack(pady=3)
-
-save_label = Label(save_frame,
-                   text="同じフォルダ",
-                   bg=LIGHT)
+Radiobutton(save_frame, text="同じフォルダ（初期）", variable=save_option, value=1, command=on_save_change, bg=LIGHT).pack(anchor="w")
+Radiobutton(save_frame, text="任意フォルダ", variable=save_option, value=2, command=on_save_change, bg=LIGHT).pack(anchor="w")
+Button(save_frame, text="📂 保存先を選択", command=select_save_dir, width=22).pack(pady=3)
+save_label = Label(save_frame, text="同じフォルダ", bg=LIGHT)
 save_label.pack()
 
-rotate_frame = LabelFrame(root,
-                          text="回転設定",
-                          bg=LIGHT,
-                          fg=PRIMARY,
-                          font=("Segoe UI", 10, "bold"),
-                          padx=5, pady=5)
+rotate_frame = LabelFrame(root, text="回転設定", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
 rotate_frame.pack(pady=5, fill="x", padx=10)
 
-Radiobutton(rotate_frame,
-            text="左回転（270°）",
-            variable=rotate_option,
-            value=270,
-            bg=LIGHT).pack(anchor="w")
+Radiobutton(rotate_frame, text="左回転（270°）", variable=rotate_option, value=270, bg=LIGHT).pack(anchor="w")
+Radiobutton(rotate_frame, text="上下回転（180°）", variable=rotate_option, value=180, bg=LIGHT).pack(anchor="w")
+Radiobutton(rotate_frame, text="右回転（90°）", variable=rotate_option, value=90, bg=LIGHT).pack(anchor="w")
 
-Radiobutton(rotate_frame,
-            text="上下回転（180°）",
-            variable=rotate_option,
-            value=180,
-            bg=LIGHT).pack(anchor="w")
-
-Radiobutton(rotate_frame,
-            text="右回転（90°）",
-            variable=rotate_option,
-            value=90,
-            bg=LIGHT).pack(anchor="w")
-
-op_frame = LabelFrame(root, text="操作",
-                      bg=LIGHT, fg=PRIMARY,
-                      font=("Segoe UI", 10, "bold"),
-                      padx=5, pady=5)
+op_frame = LabelFrame(root, text="操作", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
 op_frame.pack(pady=10)
 
-btn_merge = Button(op_frame, text="結合", width=12,
-                   command=lambda: safe_run(merge_pdfs))
-btn_split = Button(op_frame, text="分割", width=12,
-                   command=lambda: safe_run(split_pdfs))
-btn_rotate = Button(op_frame, text="回転", width=12,
-                    command=lambda: safe_run(rotate_pdfs))
-btn_text = Button(op_frame, text="Text抽出", width=12,
-                  command=lambda: safe_run(extract_text))
-btn_excel = Button(op_frame, text="Excel変換", width=12,
-                   command=lambda: safe_run(convert_to_excel))
-btn_jpeg = Button(op_frame, text="JPEG変換", width=12,
-                  command=lambda: safe_run(lambda: convert_to_image("jpg")))
-btn_png = Button(op_frame, text="PNG変換", width=12,
-                 command=lambda: safe_run(lambda: convert_to_image("png")))
+btn_merge = Button(op_frame, text="結合", width=12, command=lambda: safe_run(merge_pdfs))
+btn_split = Button(op_frame, text="分割", width=12, command=lambda: safe_run(split_pdfs))
+btn_rotate = Button(op_frame, text="回転", width=12, command=lambda: safe_run(rotate_pdfs))
+btn_text = Button(op_frame, text="Text抽出", width=12, command=lambda: safe_run(extract_text))
+btn_excel = Button(op_frame, text="Excel変換", width=12, command=lambda: safe_run(convert_to_excel))
+btn_jpeg = Button(op_frame, text="JPEG変換", width=12, command=lambda: safe_run(lambda fs: convert_to_image_task(fs, "jpg")))
+btn_png = Button(op_frame, text="PNG変換", width=12, command=lambda: safe_run(lambda fs: convert_to_image_task(fs, "png")))
 
 btn_merge.grid(row=0, column=0, padx=5, pady=3)
 btn_split.grid(row=0, column=1, padx=5, pady=3)
