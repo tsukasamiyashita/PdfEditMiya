@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya - スキャン画像対応・DXF変換・完全版 (High Precision)
+PdfEditMiya v1.2.0
+------------------
+更新情報: DXF変換精度の向上(曲線・スキャン対応)
 """
 
 import os
@@ -20,15 +22,19 @@ import ezdxf
 # 基本設定
 # ==============================
 
-APP_TITLE = "PdfEditMiya (High Precision)"
-WINDOW_WIDTH = 560
-WINDOW_HEIGHT = 600
+APP_TITLE = "PdfEditMiya"
+VERSION = "v1.2.0"
 
-PRIMARY = "#1565C0"
-LIGHT = "#E3F2FD"
-SUCCESS = "#2E7D32"
-ERROR = "#C62828"
-INACTIVE = "#90A4AE"
+WINDOW_WIDTH = 560
+WINDOW_HEIGHT = 620
+
+# カラーパレット
+PRIMARY = "#1565C0"   # メインカラー(青)
+LIGHT = "#E3F2FD"     # 背景色(薄青)
+SUCCESS = "#2E7D32"   # 成功色(緑)
+ERROR = "#C62828"     # エラー色(赤)
+INACTIVE = "#90A4AE"  # 無効色(グレー)
+INFO_TEXT = "#455A64" # 説明文の色(濃いグレー)
 
 # ==============================
 # グローバル変数
@@ -47,6 +53,7 @@ cancelled = False
 # ==============================
 
 def run_task(func):
+    """重い処理を別スレッドで実行"""
     global cancelled
     cancelled = False
     try:
@@ -71,7 +78,7 @@ def safe_run(func):
     threading.Thread(target=run_task, args=(func,), daemon=True).start()
 
 # ==============================
-# UI補助
+# UI補助機能
 # ==============================
 
 def show_message(msg, color=PRIMARY):
@@ -79,20 +86,29 @@ def show_message(msg, color=PRIMARY):
     win.geometry("220x90")
     win.configure(bg=LIGHT)
     win.attributes("-topmost", True)
-    Label(win, text=msg, bg=LIGHT, fg=color, font=("Segoe UI", 10, "bold")).pack(expand=True)
-    win.after(3000, win.destroy)
+    
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 110
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 45
+    win.geometry(f"+{x}+{y}")
+    
+    Label(win, text=msg, bg=LIGHT, fg=color, font=("Segoe UI", 12, "bold")).pack(expand=True)
+    win.after(2500, win.destroy)
 
 def show_processing(total_steps=1):
     global processing_popup, progress_bar
     processing_popup = Toplevel(root)
-    processing_popup.title("実行中")
+    processing_popup.title("処理中")
     processing_popup.geometry("300x120")
     processing_popup.configure(bg=LIGHT)
     processing_popup.grab_set()
+    
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 150
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 60
+    processing_popup.geometry(f"+{x}+{y}")
 
-    Label(processing_popup, text="処理中...", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold")).pack(pady=10)
+    Label(processing_popup, text="処理を実行しています...", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold")).pack(pady=15)
     progress_bar = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_steps, length=240)
-    progress_bar.pack(pady=10)
+    progress_bar.pack(pady=5)
 
 def close_processing():
     global processing_popup
@@ -114,7 +130,6 @@ def get_save_dir(original_path):
     if save_option.get() == 1: return os.path.dirname(original_path)
     if preset_save_dir: return preset_save_dir
     
-    # メインスレッドでダイアログを出す必要がある
     folder = filedialog.askdirectory(title="保存先フォルダを選択")
     if folder:
         preset_save_dir = folder
@@ -212,27 +227,32 @@ def extract_text(files):
         update_progress(i)
 
 def convert_to_excel(files):
+    """Excel変換 (標準モード)"""
     border_style = Side(border_style="thin", color="000000")
     for i, pdf_path in enumerate(files, 1):
         wb = Workbook()
         wb.remove(wb.active)
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_idx, page in enumerate(pdf.pages):
-                tables = page.extract_tables()
-                if not tables: continue
-                ws = wb.create_sheet(f"Page_{page_idx+1}")
-                current_row = 1
-                for table in tables:
-                    for row_data in table:
-                        for col_idx, cell_value in enumerate(row_data, 1):
-                            val = str(cell_value).strip() if cell_value else ""
-                            cell = ws.cell(row=current_row, column=col_idx, value=val)
-                            cell.border = Border(left=border_style, right=border_style, top=border_style, bottom=border_style)
-                        current_row += 1
-                    current_row += 2
-        save_dir = get_save_dir(pdf_path)
-        if not save_dir: return
-        wb.save(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(pdf_path))[0]}_Excel.xlsx"))
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_idx, page in enumerate(pdf.pages):
+                    tables = page.extract_tables()
+                    if not tables: continue
+                    ws = wb.create_sheet(f"Page_{page_idx+1}")
+                    current_row = 1
+                    for table in tables:
+                        for row_data in table:
+                            for col_idx, cell_value in enumerate(row_data, 1):
+                                val = str(cell_value).strip() if cell_value else ""
+                                cell = ws.cell(row=current_row, column=col_idx, value=val)
+                                cell.border = Border(left=border_style, right=border_style, top=border_style, bottom=border_style)
+                            current_row += 1
+                        current_row += 2
+            
+            save_dir = get_save_dir(pdf_path)
+            if save_dir:
+                wb.save(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(pdf_path))[0]}_Excel.xlsx"))
+        except Exception as e:
+            print(f"Excel Error: {e}")
         update_progress(i)
 
 def convert_to_image(files, ext):
@@ -246,11 +266,7 @@ def convert_to_image(files, ext):
         update_progress(i)
 
 def convert_to_dxf(files):
-    """
-    高精度DXF変換:
-    1. ベクター(CAD)データ: 線分に加え、矩形・ベジェ曲線をサポート
-    2. ラスタ(スキャン)データ: ノイズ除去・モルフォロジー変換・輪郭近似
-    """
+    """DXF変換 (v1.2.0: 高精度版)"""
     for i, f in enumerate(files, 1):
         try:
             doc = fitz.open(f)
@@ -262,79 +278,49 @@ def convert_to_dxf(files):
             for page in doc:
                 h = page.rect.height
                 paths = page.get_drawings()
-                
-                # ベクターデータとして処理するか判定
                 is_vector_rich = len(paths) > 0
 
                 if is_vector_rich:
-                    # --- ベクターデータ処理 (CAD由来) ---
+                    # ベクターモード
                     for path in paths:
                         for item in path["items"]:
-                            # Line (直線)
                             if item[0] == "l":
                                 msp.add_line((item[1].x, h - item[1].y), (item[2].x, h - item[2].y))
-                            # Rect (矩形) -> ポリライン
                             elif item[0] == "re":
                                 rect = item[1]
-                                pts = [
-                                    (rect.x0, h - rect.y0), (rect.x1, h - rect.y0),
-                                    (rect.x1, h - rect.y1), (rect.x0, h - rect.y1)
-                                ]
+                                pts = [(rect.x0, h - rect.y0), (rect.x1, h - rect.y0),
+                                       (rect.x1, h - rect.y1), (rect.x0, h - rect.y1)]
                                 msp.add_lwpolyline(pts, close=True)
-                            # Curve (曲線/ベジェ) -> スプライン
                             elif item[0] == "c":
                                 p1, p2, p3, p4 = item[1], item[2], item[3], item[4]
-                                msp.add_spline([
-                                    (p1.x, h - p1.y), (p2.x, h - p2.y),
-                                    (p3.x, h - p3.y), (p4.x, h - p4.y)
-                                ])
+                                msp.add_spline([(p1.x, h - p1.y), (p2.x, h - p2.y),
+                                                (p3.x, h - p3.y), (p4.x, h - p4.y)])
                 
-                # ベクターが少ない、または無い場合は画像解析を行う
                 if not is_vector_rich or len(paths) < 5:
-                    # --- ラスタデータ処理 (スキャン画像) ---
+                    # 画像解析モード
                     pix = page.get_pixmap(dpi=300)
                     img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                    
-                    # グレースケール化
                     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if pix.n >= 3 else img
                     
-                    # 前処理: ガウシアンブラーでノイズ軽減
                     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+                    binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                                 cv2.THRESH_BINARY_INV, 11, 2)
+                    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
                     
-                    # 二値化: 適応的閾値処理 (影や照明ムラに強い)
-                    binary = cv2.adaptiveThreshold(
-                        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                        cv2.THRESH_BINARY_INV, 11, 2
-                    )
-
-                    # モルフォロジー変換: 閉処理で線を繋ぎ、微細ノイズを除去
-                    kernel = np.ones((3, 3), np.uint8)
-                    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-
-                    # 輪郭抽出
                     contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-                    
                     scale_x = page.rect.width / pix.w
                     scale_y = page.rect.height / pix.h
 
                     for cnt in contours:
-                        # 小さなノイズ(ゴミ)は無視
                         if cv2.contourArea(cnt) < 15: continue 
-                        
-                        # 輪郭近似 (ギザギザを直線化)
                         epsilon = 0.003 * cv2.arcLength(cnt, True)
-                        approx = cv2.approxPolyDP(cnt, epsilon, True)
-
-                        # 座標変換 (画像座標 -> DXF座標)
-                        pts = [(p[0][0] * scale_x, h - p[0][1] * scale_y) for p in approx]
-                        
+                        pts = [(p[0][0] * scale_x, h - p[0][1] * scale_y) for p in cv2.approxPolyDP(cnt, epsilon, True)]
                         if len(pts) > 1:
                             msp.add_lwpolyline(pts, close=True)
 
             dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
         except Exception as e:
             print(f"DXF Conversion Error: {e}")
-        
         update_progress(i)
 
 # ==============================
@@ -350,15 +336,24 @@ def update_ui():
     btn_merge.config(state=NORMAL if current_mode=="folder" else DISABLED, bg="#1E88E5" if current_mode=="folder" else LIGHT, fg="white" if current_mode=="folder" else INACTIVE)
 
 root = Tk()
-root.title(APP_TITLE)
+root.title(f"{APP_TITLE} {VERSION}")
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
 root.configure(bg=LIGHT)
 root.resizable(False, False)
 
 rotate_option, save_option = IntVar(value=270), IntVar(value=1)
 
-Label(root, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 15, "bold")).pack(pady=8)
+# --- タイトル & バージョン ---
+title_frame = Frame(root, bg=LIGHT)
+title_frame.pack(pady=(10, 2))
+Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "bold")).pack(side=LEFT)
+Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
 
+# --- 更新情報メッセージ ---
+info_text = "✨ Update: DXF変換精度向上（曲線・スキャン画像対応）"
+Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 8))
+
+# --- 以下、元のレイアウトを保持 ---
 file_frame = Frame(root, bg=LIGHT)
 file_frame.pack(pady=5)
 Button(file_frame, text="📄 ファイル選択", command=select_files, width=22).grid(row=0, column=0, padx=5)
@@ -392,7 +387,7 @@ btn_jpeg = Button(op_frame, text="JPEG変換", width=12, command=lambda: safe_ru
 btn_png = Button(op_frame, text="PNG変換", width=12, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")))
 btn_dxf = Button(op_frame, text="DXF変換", width=12, command=lambda: safe_run(convert_to_dxf))
 
-# レイアウト配置
+# グリッド配置
 op_list = [btn_merge, btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf]
 for i, b in enumerate(op_list):
     b.grid(row=i//4, column=i%4, padx=5, pady=3)
