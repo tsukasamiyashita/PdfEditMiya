@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya - スキャン画像対応・DXF変換・完全版
+PdfEditMiya - スキャン画像対応・DXF変換・完全版 (High Precision)
 """
 
 import os
@@ -8,12 +8,11 @@ import threading
 import cv2
 import numpy as np
 from tkinter import *
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from PyPDF2 import PdfReader, PdfWriter
 import pdfplumber
 from openpyxl import Workbook
-from openpyxl.styles import Border, Side, Alignment
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Border, Side
 import fitz  # PyMuPDF
 import ezdxf
 
@@ -21,9 +20,9 @@ import ezdxf
 # 基本設定
 # ==============================
 
-APP_TITLE = "PdfEditMiya"
+APP_TITLE = "PdfEditMiya (High Precision)"
 WINDOW_WIDTH = 560
-WINDOW_HEIGHT = 600  # 元のサイズを維持
+WINDOW_HEIGHT = 600
 
 PRIMARY = "#1565C0"
 LIGHT = "#E3F2FD"
@@ -114,6 +113,8 @@ def get_save_dir(original_path):
     global preset_save_dir, cancelled
     if save_option.get() == 1: return os.path.dirname(original_path)
     if preset_save_dir: return preset_save_dir
+    
+    # メインスレッドでダイアログを出す必要がある
     folder = filedialog.askdirectory(title="保存先フォルダを選択")
     if folder:
         preset_save_dir = folder
@@ -245,38 +246,95 @@ def convert_to_image(files, ext):
         update_progress(i)
 
 def convert_to_dxf(files):
-    """ベクタ要素とスキャン画像の両方に対応したDXF変換ロジック"""
+    """
+    高精度DXF変換:
+    1. ベクター(CAD)データ: 線分に加え、矩形・ベジェ曲線をサポート
+    2. ラスタ(スキャン)データ: ノイズ除去・モルフォロジー変換・輪郭近似
+    """
     for i, f in enumerate(files, 1):
-        doc = fitz.open(f)
-        dwg = ezdxf.new('R2010')
-        msp = dwg.modelspace()
-        save_dir = get_save_dir(f)
-        if not save_dir: return
+        try:
+            doc = fitz.open(f)
+            dwg = ezdxf.new('R2010')
+            msp = dwg.modelspace()
+            save_dir = get_save_dir(f)
+            if not save_dir: return
 
-        for page in doc:
-            h = page.rect.height
-            paths = page.get_drawings()
-            
-            if len(paths) > 20: # ベクタデータが豊富にある場合
-                for path in paths:
-                    for item in path["items"]:
-                        if item[0] == "l":
-                            msp.add_line((item[1].x, h-item[1].y), (item[2].x, h-item[2].y))
-            else: # スキャン画像(ラスタ)として処理
-                pix = page.get_pixmap(dpi=300)
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-                # エッジ抽出
-                binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-                contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            for page in doc:
+                h = page.rect.height
+                paths = page.get_drawings()
                 
-                scale = page.rect.width / pix.w
-                for cnt in contours:
-                    if cv2.contourArea(cnt) < 10: continue # 小さなノイズを無視
-                    pts = [(p[0][0]*scale, h - p[0][1]*scale) for p in cnt]
-                    if len(pts) > 1: msp.add_lwpolyline(pts, close=True)
+                # ベクターデータとして処理するか判定
+                is_vector_rich = len(paths) > 0
 
-        dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
+                if is_vector_rich:
+                    # --- ベクターデータ処理 (CAD由来) ---
+                    for path in paths:
+                        for item in path["items"]:
+                            # Line (直線)
+                            if item[0] == "l":
+                                msp.add_line((item[1].x, h - item[1].y), (item[2].x, h - item[2].y))
+                            # Rect (矩形) -> ポリライン
+                            elif item[0] == "re":
+                                rect = item[1]
+                                pts = [
+                                    (rect.x0, h - rect.y0), (rect.x1, h - rect.y0),
+                                    (rect.x1, h - rect.y1), (rect.x0, h - rect.y1)
+                                ]
+                                msp.add_lwpolyline(pts, close=True)
+                            # Curve (曲線/ベジェ) -> スプライン
+                            elif item[0] == "c":
+                                p1, p2, p3, p4 = item[1], item[2], item[3], item[4]
+                                msp.add_spline([
+                                    (p1.x, h - p1.y), (p2.x, h - p2.y),
+                                    (p3.x, h - p3.y), (p4.x, h - p4.y)
+                                ])
+                
+                # ベクターが少ない、または無い場合は画像解析を行う
+                if not is_vector_rich or len(paths) < 5:
+                    # --- ラスタデータ処理 (スキャン画像) ---
+                    pix = page.get_pixmap(dpi=300)
+                    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                    
+                    # グレースケール化
+                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if pix.n >= 3 else img
+                    
+                    # 前処理: ガウシアンブラーでノイズ軽減
+                    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+                    
+                    # 二値化: 適応的閾値処理 (影や照明ムラに強い)
+                    binary = cv2.adaptiveThreshold(
+                        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                        cv2.THRESH_BINARY_INV, 11, 2
+                    )
+
+                    # モルフォロジー変換: 閉処理で線を繋ぎ、微細ノイズを除去
+                    kernel = np.ones((3, 3), np.uint8)
+                    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+                    # 輪郭抽出
+                    contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    scale_x = page.rect.width / pix.w
+                    scale_y = page.rect.height / pix.h
+
+                    for cnt in contours:
+                        # 小さなノイズ(ゴミ)は無視
+                        if cv2.contourArea(cnt) < 15: continue 
+                        
+                        # 輪郭近似 (ギザギザを直線化)
+                        epsilon = 0.003 * cv2.arcLength(cnt, True)
+                        approx = cv2.approxPolyDP(cnt, epsilon, True)
+
+                        # 座標変換 (画像座標 -> DXF座標)
+                        pts = [(p[0][0] * scale_x, h - p[0][1] * scale_y) for p in approx]
+                        
+                        if len(pts) > 1:
+                            msp.add_lwpolyline(pts, close=True)
+
+            dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
+        except Exception as e:
+            print(f"DXF Conversion Error: {e}")
+        
         update_progress(i)
 
 # ==============================

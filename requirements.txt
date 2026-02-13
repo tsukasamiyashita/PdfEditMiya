@@ -1,0 +1,7 @@
+opencv-python
+numpy
+PyPDF2
+pdfplumber
+openpyxl
+pymupdf
+ezdxf
