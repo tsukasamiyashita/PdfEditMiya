@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.2.0
+PdfEditMiya v1.2.1
 ------------------
-更新情報: DXF変換精度の向上(曲線・スキャン対応)
+更新情報:
+- v1.2.1: メニューバー追加（バージョン履歴、Readme表示機能）
+- v1.2.0: DXF変換精度の向上(曲線・スキャン対応)
 """
 
 import os
@@ -10,7 +12,8 @@ import threading
 import cv2
 import numpy as np
 from tkinter import *
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, Menu
+import tkinter.scrolledtext as st
 from PyPDF2 import PdfReader, PdfWriter
 import pdfplumber
 from openpyxl import Workbook
@@ -23,7 +26,7 @@ import ezdxf
 # ==============================
 
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.2.0"
+VERSION = "v1.2.1"
 
 WINDOW_WIDTH = 560
 WINDOW_HEIGHT = 620
@@ -35,6 +38,27 @@ SUCCESS = "#2E7D32"   # 成功色(緑)
 ERROR = "#C62828"     # エラー色(赤)
 INACTIVE = "#90A4AE"  # 無効色(グレー)
 INFO_TEXT = "#455A64" # 説明文の色(濃いグレー)
+
+# バージョン履歴データ
+VERSION_HISTORY = """
+[ v1.2.1 ]
+- メニューバーの実装
+- Readme.md のアプリ内表示機能追加
+- バージョン履歴の表示機能追加
+
+[ v1.2.0 ]
+- DXF変換機能の強化
+- 曲線近似アルゴリズムの改善
+- スキャン済みPDF(ラスター画像)からのCADデータ化対応
+
+[ v1.1.0 ]
+- Excel変換機能の追加
+- 画像変換(JPEG/PNG)機能の追加
+
+[ v1.0.0 ]
+- 初回リリース
+- 基本機能（結合、分割、回転、テキスト抽出）実装
+"""
 
 # ==============================
 # グローバル変数
@@ -120,6 +144,51 @@ def update_progress(step):
     if progress_bar:
         progress_bar["value"] = step
         progress_bar.update()
+
+# ==============================
+# メニューバー機能 (表示系)
+# ==============================
+
+def show_text_window(title, content):
+    """テキストを表示する汎用ウィンドウ"""
+    win = Toplevel(root)
+    win.title(title)
+    win.geometry("500x400")
+    
+    # 画面中央に配置
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 250
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 200
+    win.geometry(f"+{x}+{y}")
+
+    text_area = st.ScrolledText(win, wrap=WORD, font=("Consolas", 10))
+    text_area.pack(expand=True, fill=BOTH, padx=5, pady=5)
+    
+    text_area.insert(END, content)
+    text_area.configure(state=DISABLED) # 編集不可
+
+def show_version_info():
+    """バージョン情報を表示"""
+    msg = f"{APP_TITLE}\nバージョン: {VERSION}\n\nPython & Tkinter製 PDF編集ツール"
+    messagebox.showinfo("バージョン情報", msg)
+
+def show_history():
+    """バージョン履歴を表示"""
+    show_text_window("バージョン履歴", VERSION_HISTORY.strip())
+
+def show_readme():
+    """readme.mdの内容を表示"""
+    readme_path = "readme.md"
+    content = ""
+    if os.path.exists(readme_path):
+        try:
+            with open(readme_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            content = f"ファイルの読み込みに失敗しました:\n{e}"
+    else:
+        content = "readme.md ファイルが見つかりませんでした。"
+    
+    show_text_window("Readme", content)
 
 # ==============================
 # 保存・選択ロジック
@@ -304,7 +373,7 @@ def convert_to_dxf(files):
                     
                     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
                     binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                 cv2.THRESH_BINARY_INV, 11, 2)
+                                                  cv2.THRESH_BINARY_INV, 11, 2)
                     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
                     
                     contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -341,6 +410,16 @@ root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
 root.configure(bg=LIGHT)
 root.resizable(False, False)
 
+# メニューバー作成
+menubar = Menu(root)
+help_menu = Menu(menubar, tearoff=0)
+help_menu.add_command(label="Readmeを表示", command=show_readme)
+help_menu.add_command(label="バージョン履歴", command=show_history)
+help_menu.add_separator()
+help_menu.add_command(label="バージョン情報", command=show_version_info)
+menubar.add_cascade(label="ヘルプ", menu=help_menu)
+root.config(menu=menubar)
+
 rotate_option, save_option = IntVar(value=270), IntVar(value=1)
 
 # --- タイトル & バージョン ---
@@ -350,7 +429,7 @@ Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "
 Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
 
 # --- 更新情報メッセージ ---
-info_text = "✨ Update: DXF変換精度向上（曲線・スキャン画像対応）"
+info_text = "✨ Update: メニューバー追加（履歴・Readme表示）"
 Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 8))
 
 # --- 以下、元のレイアウトを保持 ---
