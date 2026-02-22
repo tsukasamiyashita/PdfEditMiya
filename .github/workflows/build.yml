@@ -44,7 +44,7 @@ jobs:
         --hidden-import tkinterdnd2 
         --hidden-import PyPDF2 
         --hidden-import ezdxf 
-        main.py
+        app.pyw
 
     # 5. 完成したexeファイルをGitHub上にアップロード（Artifact）
     - name: Upload Artifact
