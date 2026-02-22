@@ -1,37 +1,31 @@
 name: Build EXE
 
-# いつ実行するか（ここではmainブランチにプッシュした時）
 on:
   push:
     branches: [ "main" ]
 
 jobs:
   build:
-    # GitHubが用意するWindowsパソコンを使う
     runs-on: windows-latest
 
     steps:
-    # 1. あなたのコードをGitHubのパソコンにコピーする
     - uses: actions/checkout@v4
 
-    # 2. Pythonをインストールする
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # 必要に応じてバージョンを変更してください
+        python-version: '3.10' # 必要に応じて変更
 
-    # 3. PyInstallerなどの準備をする
+    # ▼ここが変更点です！▼
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install -r requirements.txt
         pip install pyinstaller
-        # もし他にも必要なライブラリがあればここに追記（例: pip install requests）
 
-    # 4. PyInstallerで変換を実行する
     - name: Build with PyInstaller
       run: pyinstaller --onefile main.py
 
-    # 5. 完成したexeファイルをダウンロードできるように保存する（Artifact）
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
