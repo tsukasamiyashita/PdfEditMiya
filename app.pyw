@@ -8,6 +8,7 @@ PdfEditMiya v1.2.1
 """
 
 import os
+import sys
 import threading
 import cv2
 import numpy as np
@@ -20,6 +21,20 @@ from openpyxl import Workbook
 from openpyxl.styles import Border, Side
 import fitz  # PyMuPDF
 import ezdxf
+
+# ==============================
+# リソースパス取得関数 (exe化対応)
+# ==============================
+def resource_path(relative_path):
+    """実行時（exe）でも通常時（.pyw）でも正しいファイルパスを取得する"""
+    try:
+        # PyInstallerで展開された時の一時フォルダパス
+        base_path = sys._MEIPASS
+    except Exception:
+        # 通常のPythonスクリプトとして実行した時のパス
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # ==============================
 # 基本設定
@@ -176,9 +191,11 @@ def show_history():
     show_text_window("バージョン履歴", VERSION_HISTORY.strip())
 
 def show_readme():
-    """readme.mdの内容を表示"""
-    readme_path = "readme.md"
+    """readme.mdの内容を表示 (exe化対応)"""
+    # resource_path関数を使ってパスを取得
+    readme_path = resource_path("readme.md")
     content = ""
+    
     if os.path.exists(readme_path):
         try:
             with open(readme_path, "r", encoding="utf-8") as f:
@@ -186,7 +203,7 @@ def show_readme():
         except Exception as e:
             content = f"ファイルの読み込みに失敗しました:\n{e}"
     else:
-        content = "readme.md ファイルが見つかりませんでした。"
+        content = f"readme.md ファイルが見つかりませんでした。\n検索パス: {readme_path}"
     
     show_text_window("Readme", content)
 

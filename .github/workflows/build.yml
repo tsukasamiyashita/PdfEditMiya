@@ -42,6 +42,7 @@ jobs:
         --onefile 
         --noconsole 
         --name "PdfEditMiya-v1.2.1" 
+        --add-data "readme.md;."
         --hidden-import openpyxl 
         --hidden-import PIL 
         --hidden-import tkinterdnd2 
