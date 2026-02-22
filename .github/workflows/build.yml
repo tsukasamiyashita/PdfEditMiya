@@ -39,6 +39,7 @@ jobs:
         pyinstaller 
         --onefile 
         --noconsole 
+        --name "PdfEditMiya-v1.2.1"       # ←★追加：「PdfEditor」の部分を好きな名前にします
         --hidden-import openpyxl 
         --hidden-import PIL 
         --hidden-import tkinterdnd2 
@@ -50,6 +51,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: PdfEditMiya  # 作成するフォルダ名
-        # 生成されたexeファイルのパス（main.pyの場合、dist/main.exeになります）
-        path: dist/app.exe
+        name: PdfEditMiya-v1.2.1  # ←★変更：フォルダ名
+        path: dist/PdfEditMiya-v1.2.1.exe # ←★変更：上で付けた名前 + .exe にします
