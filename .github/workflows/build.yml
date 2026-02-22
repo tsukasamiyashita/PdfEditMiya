@@ -52,4 +52,4 @@ jobs:
       with:
         name: PdfEditMiya  # 作成するフォルダ名
         # 生成されたexeファイルのパス（main.pyの場合、dist/main.exeになります）
-        path: dist/app.exe  # 作成するファイル名
+        path: dist/app.exe
