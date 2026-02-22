@@ -52,4 +52,4 @@ jobs:
       with:
         name: DesktopApp-EXE
         # 生成されたexeファイルのパス（main.pyの場合、dist/main.exeになります）
-        path: dist/main.exe
+        path: dist/app.exe
