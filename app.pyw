@@ -4,7 +4,8 @@ PdfEditMiya v1.3.0
 ------------------
 更新情報:
 - v1.3.0: 手書き文字抽出に生成AI（Gemini API）を導入
-- v1.3.0_fix: APIキーの保存先をユーザーディレクトリに変更し、GitHubへの誤コミット（流出）を完全防止
+- v1.3.0_fix2: 処理中画面を「全体進捗」と「個別進捗」の2段プログレスバーに改良
+- v1.3.0_fix1: APIキーの保存先をユーザーディレクトリに変更し、GitHubへの流出を完全防止
 - v1.2.1: メニューバー追加（バージョン履歴、Readme表示機能）
 - v1.2.0: DXF変換精度の向上(曲線・スキャン対応)
 """
@@ -59,15 +60,14 @@ ERROR = "#C62828"
 INACTIVE = "#90A4AE"
 INFO_TEXT = "#455A64"
 
-# ★セキュリティ改善: APIキーの保存先をプロジェクト内から「ユーザーのホームディレクトリの隠しファイル」に変更
-# これにより、プロジェクトフォルダをGitHubにコミットしてもキーが流出することは絶対にありません。
+# セキュリティ対策: APIキーの保存先をホームディレクトリの隠しファイルに指定
 USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
 [ v1.3.0 ]
 - 手書き文字抽出に生成AI（Gemini API）を搭載
-- 結合セルの空欄自動補完、日付形式の自動変換機能を実装
+- 処理中の進捗画面を「全体」と「個別(ページ)」の2段階表示に進化
 - APIキーの保存先を変更し、GitHubへの流出を防止するセキュリティ対策を実施
 - 404エラーを回避するため「利用可能なAIモデルの自動検索システム」を搭載
 - 抽出結果を理想的なフォーマットの Excel (.xlsx) として出力
@@ -87,8 +87,12 @@ selected_files = []
 selected_folder = ""
 current_mode = None
 preset_save_dir = ""
+
 processing_popup = None
-progress_bar = None
+overall_label = None
+overall_progress = None
+file_label = None
+file_progress = None
 cancelled = False
 
 # ==============================
@@ -197,7 +201,7 @@ def safe_run(func):
     threading.Thread(target=run_task, args=(func,), daemon=True).start()
 
 # ==============================
-# UI補助機能
+# UI補助機能 (ダブルプログレスバー対応)
 # ==============================
 
 def show_message(msg, color=PRIMARY):
@@ -213,19 +217,28 @@ def show_message(msg, color=PRIMARY):
         win.after(2500, win.destroy)
     root.after(0, _task)
 
-def show_processing(total_steps=1):
-    global processing_popup, progress_bar
+def show_processing(total_files=1):
+    global processing_popup, overall_label, overall_progress, file_label, file_progress
     processing_popup = Toplevel(root)
     processing_popup.title("処理中")
-    processing_popup.geometry("380x120")
+    processing_popup.geometry("400x180")
     processing_popup.configure(bg=LIGHT)
     processing_popup.grab_set()
-    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 190
-    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 60
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 200
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 90
     processing_popup.geometry(f"+{x}+{y}")
-    Label(processing_popup, text="処理を実行しています...", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold")).pack(pady=15)
-    progress_bar = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_steps, length=320)
-    progress_bar.pack(pady=5)
+    
+    # 上段：全体の進捗
+    overall_label = Label(processing_popup, text=f"全体の進捗 ( 0 / {total_files} ファイル )", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"))
+    overall_label.pack(pady=(15, 2))
+    overall_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_files, length=340)
+    overall_progress.pack(pady=(0, 10))
+    
+    # 下段：個別ファイルの進捗
+    file_label = Label(processing_popup, text="現在のファイルを準備中...", bg=LIGHT, fg=INFO_TEXT, font=("Segoe UI", 9))
+    file_label.pack(pady=(5, 2))
+    file_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=1, length=340)
+    file_progress.pack(pady=(0, 10))
 
 def close_processing():
     def _task():
@@ -235,27 +248,26 @@ def close_processing():
             processing_popup = None
     root.after(0, _task)
 
-def update_progress(step):
-    def _task():
-        if progress_bar and progress_bar.winfo_exists():
-            progress_bar["value"] = step
-            progress_bar.update()
-    root.after(0, _task)
-
-def update_progress_max(max_val):
-    def _task():
-        if progress_bar and progress_bar.winfo_exists():
-            progress_bar["maximum"] = max_val
-            progress_bar.update()
-    root.after(0, _task)
-
-def update_processing_text(msg):
+def update_overall_progress(step, max_val=None, text=None):
     def _task():
         if processing_popup and processing_popup.winfo_exists():
-            for w in processing_popup.winfo_children():
-                if isinstance(w, Label):
-                    w.config(text=msg)
-                    break
+            if max_val is not None:
+                overall_progress["maximum"] = max_val
+            overall_progress["value"] = step
+            if text:
+                overall_label.config(text=text)
+            overall_progress.update()
+    root.after(0, _task)
+
+def update_file_progress(step, max_val=None, text=None):
+    def _task():
+        if processing_popup and processing_popup.winfo_exists():
+            if max_val is not None:
+                file_progress["maximum"] = max_val
+            file_progress["value"] = step
+            if text:
+                file_label.config(text=text)
+            file_progress.update()
     root.after(0, _task)
 
 # ==============================
@@ -342,11 +354,19 @@ def get_target_files():
 # ==============================
 
 def merge_pdfs(files):
+    total_files = len(files)
     writer = PdfWriter()
+    update_overall_progress(0, total_files, f"全体の進捗 ( 0 / {total_files} ファイル )")
+    
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         reader = PdfReader(f)
-        for p in reader.pages: writer.add_page(p)
-        update_progress(i)
+        total_pages = len(reader.pages)
+        for j, p in enumerate(reader.pages, 1):
+            update_file_progress(j, total_pages, f"ファイルを結合中... ( {j} / {total_pages} ページ )")
+            writer.add_page(p)
+            
+    update_file_progress(1, 1, "PDFを保存中...")
     save_dir = get_save_dir(files[0])
     if save_dir:
         name = os.path.basename(selected_folder) if selected_folder else "Merged"
@@ -354,43 +374,60 @@ def merge_pdfs(files):
             writer.write(out)
 
 def split_pdfs(files):
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         reader = PdfReader(f)
         save_dir = get_save_dir(f)
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
-        for n, p in enumerate(reader.pages):
+        total_pages = len(reader.pages)
+        
+        for n, p in enumerate(reader.pages, 1):
+            update_file_progress(n, total_pages, f"ファイルを分割中... ( {n} / {total_pages} ページ )")
             writer = PdfWriter()
             writer.add_page(p)
-            with open(os.path.join(save_dir, f"{base}_Split_{n+1}.pdf"), "wb") as out:
+            with open(os.path.join(save_dir, f"{base}_Split_{n}.pdf"), "wb") as out:
                 writer.write(out)
-        update_progress(i)
 
 def rotate_pdfs(files):
     deg = rotate_option.get()
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         reader = PdfReader(f)
         writer = PdfWriter()
-        for p in reader.pages:
+        total_pages = len(reader.pages)
+        
+        for j, p in enumerate(reader.pages, 1):
+            update_file_progress(j, total_pages, f"ページを回転中... ( {j} / {total_pages} ページ )")
             p.rotate(deg)
             writer.add_page(p)
+            
         save_dir = get_save_dir(f)
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         with open(os.path.join(save_dir, f"{base}_Rotate.pdf"), "wb") as out:
             writer.write(out)
-        update_progress(i)
 
 def extract_text(files):
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         reader = PdfReader(f)
-        text = "".join([p.extract_text() or "" for p in reader.pages])
+        total_pages = len(reader.pages)
+        text_list = []
+        
+        for j, p in enumerate(reader.pages, 1):
+            update_file_progress(j, total_pages, f"テキストを抽出中... ( {j} / {total_pages} ページ )")
+            text_list.append(p.extract_text() or "")
+            
+        text = "".join(text_list)
         save_dir = get_save_dir(f)
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         with open(os.path.join(save_dir, f"{base}_Text.txt"), "w", encoding="utf-8") as out:
             out.write(text)
-        update_progress(i)
 
 def run_extract_handwriting():
     api_key = get_api_key()
@@ -403,7 +440,6 @@ def run_extract_handwriting():
 def extract_handwriting_task(files):
     api_key = get_api_key()
     genai.configure(api_key=api_key)
-    
     models_to_try = get_available_models(api_key)
 
     prompt = """
@@ -416,7 +452,9 @@ def extract_handwriting_task(files):
     6. 余計な挨拶や説明文、またマークダウンのコードブロック記号(```csv等)は一切出力せず、純粋なCSVのテキストデータのみを出力してください。
     """
 
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         try:
             save_dir = get_save_dir(f)
             if not save_dir: return
@@ -427,11 +465,9 @@ def extract_handwriting_task(files):
             
             doc = fitz.open(f)
             total_pages = len(doc)
-            update_progress_max(total_pages)
             
             for page_num in range(total_pages):
-                update_processing_text(f"AIが手書き文字を解析中... ( {page_num+1} / {total_pages} ページ )")
-                update_progress(page_num + 1)
+                update_file_progress(page_num + 1, total_pages, f"AIが手書き文字を解析中... ( {page_num+1} / {total_pages} ページ ) [モデル検索中]")
                 
                 ws = wb.create_sheet(f"Page_{page_num+1}")
                 page = doc[page_num]
@@ -447,6 +483,7 @@ def extract_handwriting_task(files):
 
                 for attempt in range(max_retries):
                     for model_name in models_to_try:
+                        update_file_progress(page_num + 1, text=f"AIが手書き文字を解析中... ( {page_num+1} / {total_pages} ページ ) [使用: {model_name}]")
                         try:
                             model = genai.GenerativeModel(model_name)
                             response = model.generate_content([prompt, img])
@@ -465,7 +502,7 @@ def extract_handwriting_task(files):
                     time.sleep(2 ** attempt)
 
                 if success:
-                    update_processing_text(f"解析成功 [使用モデル: {used_model}]")
+                    update_file_progress(page_num + 1, text=f"解析成功！ ( {page_num+1} / {total_pages} ページ ) [モデル: {used_model}]")
                     markdown_marker = "`" * 3
                     if csv_text.startswith(markdown_marker):
                         lines = csv_text.split('\n')
@@ -480,11 +517,12 @@ def extract_handwriting_task(files):
                         for col_idx, val in enumerate(row, 1):
                             ws.cell(row=row_idx, column=col_idx, value=val.strip())
                 else:
+                    update_file_progress(page_num + 1, text=f"解析失敗 ( {page_num+1} / {total_pages} ページ )")
                     print(f"Page {page_num+1} AI Error: {last_error}")
                     error_msg = (f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\n"
                                  f"エラー詳細: {last_error}\n"
                                  "【原因と対策】\n"
-                                 "1. Google AI StudioでAPIキーを取得しましたか？ (GCPで取得した場合、Geminiの有効化が必要です)\n"
+                                 "1. Google AI StudioでAPIキーを取得しましたか？ (GCPの場合はGeminiの有効化が必要です)\n"
                                  "2. APIキーが間違っていないか、別のサービスのキーでないか確認してください。\n"
                                  "3. もう一度「Gemini APIキー設定」から正しいキーを登録し直してください。")
                     ws.cell(row=1, column=1, value=error_msg)
@@ -492,29 +530,29 @@ def extract_handwriting_task(files):
                 gc.collect()
             
             doc.close()
-            update_processing_text("Excelファイルを保存中...")
+            update_file_progress(total_pages, total_pages, "Excelファイルを保存中...")
             out_path = os.path.join(save_dir, f"{base}_抽出後.xlsx")
             wb.save(out_path)
                 
         except Exception as e:
             print(f"Handwriting Task Error: {e}")
             raise e
-        
-        if len(files) > 1:
-            update_progress_max(len(files))
-            update_progress(i)
 
 def convert_to_excel(files):
     border_style = Side(border_style="thin", color="000000")
+    total_files = len(files)
     for i, pdf_path in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         wb = Workbook()
         wb.remove(wb.active)
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                for page_idx, page in enumerate(pdf.pages):
+                total_pages = len(pdf.pages)
+                for page_idx, page in enumerate(pdf.pages, 1):
+                    update_file_progress(page_idx, total_pages, f"表データをExcelへ変換中... ( {page_idx} / {total_pages} ページ )")
                     tables = page.extract_tables()
                     if not tables: continue
-                    ws = wb.create_sheet(f"Page_{page_idx+1}")
+                    ws = wb.create_sheet(f"Page_{page_idx}")
                     current_row = 1
                     for table in tables:
                         for row_data in table:
@@ -530,20 +568,24 @@ def convert_to_excel(files):
                 wb.save(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(pdf_path))[0]}_Excel.xlsx"))
         except Exception as e:
             print(f"Excel Error: {e}")
-        update_progress(i)
 
 def convert_to_image(files, ext):
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         doc = fitz.open(f)
         save_dir = get_save_dir(f)
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
-        for n, page in enumerate(doc):
-            page.get_pixmap(dpi=200).save(os.path.join(save_dir, f"{base}_{n+1}.{ext}"))
-        update_progress(i)
+        total_pages = len(doc)
+        for n, page in enumerate(doc, 1):
+            update_file_progress(n, total_pages, f"画像へ変換中... ( {n} / {total_pages} ページ )")
+            page.get_pixmap(dpi=200).save(os.path.join(save_dir, f"{base}_{n}.{ext}"))
 
 def convert_to_dxf(files):
+    total_files = len(files)
     for i, f in enumerate(files, 1):
+        update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         try:
             doc = fitz.open(f)
             dwg = ezdxf.new('R2010')
@@ -551,7 +593,9 @@ def convert_to_dxf(files):
             save_dir = get_save_dir(f)
             if not save_dir: return
 
-            for page in doc:
+            total_pages = len(doc)
+            for page_num, page in enumerate(doc, 1):
+                update_file_progress(page_num, total_pages, f"DXFへ変換中... ( {page_num} / {total_pages} ページ )")
                 h = page.rect.height
                 paths = page.get_drawings()
                 is_vector_rich = len(paths) > 0
@@ -589,10 +633,10 @@ def convert_to_dxf(files):
                         if len(pts) > 1:
                             msp.add_lwpolyline(pts, close=True)
 
+            update_file_progress(total_pages, total_pages, "DXFファイルを保存中...")
             dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
         except Exception as e:
             print(f"DXF Conversion Error: {e}")
-        update_progress(i)
 
 # ==============================
 # UI構築
@@ -634,7 +678,7 @@ title_frame.pack(pady=(10, 2))
 Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "bold")).pack(side=LEFT)
 Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
 
-info_text = "✨ Update: 手書き抽出にAIを搭載。空欄補完と日付変換を自動で行います。"
+info_text = "✨ Update: 進捗画面を「全体」と「個別ページ」の2段表示に改良しました"
 Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 2))
 
 note_text = (
