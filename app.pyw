@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.5.0
+PdfEditMiya v1.6.0
 ------------------
 更新情報:
-- v1.5.0: 【根本解決】AI出力をJSONスキーマ化し列ズレを完全排除。OpenCVによる多段画像前処理（ノイズ除去＋かすれ補完モルフォロジー変換）を実装。
+- v1.6.0: 
+  【新機能】AIに「ヘッダー」と「データ」を分離認識させるJSONスキーマを導入。
+  【改善】表のタイトルや表外の無関係なデータを自動で無視し、純粋なデータ行のみを集約ファイルに連結するようアーキテクチャを刷新。
+- v1.5.0: AI出力をJSONスキーマ化し列ズレを完全排除。OpenCVによる多段画像前処理を実装。抽出データの集約出力機能を追加。
 """
 
 import os
@@ -45,7 +48,7 @@ def resource_path(relative_path):
 # 基本設定
 # ==============================
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.5.0"
+VERSION = "v1.6.0"
 WINDOW_WIDTH = 680
 WINDOW_HEIGHT = 860
 
@@ -60,10 +63,15 @@ USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
+[ v1.6.0 ]
+- AIが表の「カラム（ヘッダー）」と「データ行」を自動で分離・認識するように推論ロジックを改良。
+- カラムより上にある表タイトルや日付等の無関係なデータを完全に無視・除外する機能を実装。
+- 集約データ作成時、一番上にカラム名を1行だけ配置し、以降は純粋なデータ行のみを連結した綺麗なマスターデータになるよう改善。
+
 [ v1.5.0 ]
-- AI出力をJSON形式に強制（Structured Output）し、カンマ混入による列ズレを根本的に排除。
-- 画像前処理パイプラインを入念化。ノイズ除去とモルフォロジー演算（文字の太字化・結合）を追加し、かすれた文字の抽出精度を飛躍的に向上。
-- プロンプトを改修し、「1/12」などの分母の桁落ちや、「ケッチ台車」等の専門用語の誤変換を文脈から論理補完するよう指示。
+- AI出力をJSON形式に強制し、カンマ混入による列ズレを根本的に排除。
+- 画像前処理（ノイズ除去＋かすれ補完）による精度向上。
+- 集約データ自動生成機能を追加。
 """
 
 AI_HELP_TEXT = """
@@ -121,7 +129,6 @@ def get_available_models(api_key):
     except Exception:
         pass
         
-    # 最も賢いProモデルを優先
     fallbacks = [
         'gemini-1.5-pro', 'gemini-1.5-pro-latest', 
         'gemini-2.5-pro', 'gemini-2.0-pro',
@@ -405,7 +412,7 @@ def extract_text(files):
             out.write(text)
 
 # ==============================
-# AI抽出ロジック
+# AI抽出ロジック (ヘッダー分離・集約機能付き)
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -423,6 +430,10 @@ def run_ai_extraction():
 def extract_tesseract_task(files):
     out_format = output_format_var.get()
     total_files = len(files)
+    
+    aggregated_all_rows = []
+    aggregated_all_texts = []
+    
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         try:
@@ -449,8 +460,10 @@ def extract_tesseract_task(files):
                         ws = wb.create_sheet(f"Page_{page_num+1}")
                         for row_idx, line in enumerate(text.split('\n'), 1):
                             ws.cell(row=row_idx, column=1, value=line.strip())
+                            aggregated_all_rows.append([line.strip()])
                     else:
                         all_text_list.append(text)
+                        aggregated_all_texts.append(text)
                 except Exception as e:
                     err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
                     if out_format == "xlsx":
@@ -476,6 +489,26 @@ def extract_tesseract_task(files):
             print(f"Tesseract Error: {e}")
             raise e
 
+    # Tesseractの集約処理 (テキスト構造解析が困難なため、全行結合のみ)
+    if total_files > 0:
+        save_dir = get_save_dir(files[0])
+        if save_dir:
+            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
+            update_overall_progress(total_files, total_files, "集約データを保存中...")
+            
+            if out_format == "xlsx" and aggregated_all_rows:
+                wb_agg = Workbook()
+                ws_agg = wb_agg.active
+                ws_agg.title = "集約データ"
+                for r_idx, row_data in enumerate(aggregated_all_rows, 1):
+                    ws_agg.cell(row=r_idx, column=1, value=row_data[0])
+                wb_agg.save(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.xlsx"))
+                
+            elif out_format in ["csv", "txt"] and aggregated_all_texts:
+                ext = "csv" if out_format == "csv" else "txt"
+                with open(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.{ext}"), "w", encoding="utf-8-sig" if ext=="csv" else "utf-8", newline="") as f_out:
+                    f_out.write("\n\n".join(aggregated_all_texts))
+
 def extract_gemini_task(files):
     key = api_key_var.get().strip()
     genai.configure(api_key=key)
@@ -485,31 +518,39 @@ def extract_gemini_task(files):
     if out_format in ["csv", "xlsx"]:
         prompt = """
         あなたは優秀なデータ入力オペレーターです。添付された手書きと印刷が混在する「機械設備・部品図面などの管理台帳（表）」の画像を読み取り、正確なJSONデータを作成してください。
-        処理時間はかかっても構いません。かすれた文字や省略記号、行のズレなどを、全体の文脈と規則性から「人間の目」のように論理的に推論してください。
-
-        【出力形式（絶対厳守）】
+        
+        【出力形式とカラムの自動認識（絶対厳守）】
         出力は必ず以下のJSONスキーマに従ってください。CSVやマークダウンでのテキスト出力は禁止です。
         {
+          "header": ["列1名", "列2名", "列3名", "列4名", "列5名"],
           "rows": [
-            ["列1", "列2", "列3", "列4", "列5"],
-            ["列1", "列2", "列3", "列4", "列5"]
+            ["データ1", "データ2", "データ3", "データ4", "データ5"],
+            ["データ1", "データ2", "データ3", "データ4", "データ5"]
           ]
         }
-        ※ 各行は必ず「5つの要素」を持つ配列にしてください。不足がある場合は空文字("")で埋めてください。表のタイトルやヘッダーもこの5列の中に適切に割り当てて格納してください。
+        ※ 画像の中から「表のカラム（ヘッダー行）」を自動認識し、その名前を "header" に配列として格納してください。
+        ※ そのカラムより下にある実際の「データ行」のみを "rows" に格納してください。
+        ※ 【重要】カラム（表のヘッダー）より上にある「表のタイトル」「日付」「ページ番号」「注記」など、表のデータそのものに無関係な文字列は、完全に無視して出力から除外してください。
 
         【誤認識防止と汎用的な推論ルール（最重要）】
-        - 分数・ページ番号の論理補完（桁落ち厳禁）: 「1/12」がかすれて「1/2」に見えるような「分母の桁落ち」が頻発しています。分母は同じグループ内で共通であることが多いので、前後の行を必ず確認し、論理的に正しい分母を推測して補完してください。分子は基本的に1ずつ増えます。
-        - 専門用語への文脈補正と誤変換防止: 画像は機械・設備の図面リストです。手書きのクセにより「ケッチ台車」が「写真事業」に見えるような誤読が発生しています。前後の文脈から「機械・部品・図面・設備」に関する専門用語として意味が通るか確認し、不自然な一般名詞には変換しないでください。形状が似ている専門用語を採用してください。
-        - 空白・省略記号の引継ぎ: 左側の列で、下の行が空白や省略記号（「〃」など）の場合は、必ず「直上の行の文字列」を引き継いで出力してください。
-        - 整理番号の連番推論: 台帳の通し番号は基本的に「1ずつ増える連番」です。かすれて読めない場合でも、直前の行の数字から論理的に連番を補完し、欠損や飛び番を防いでください。
+        - 各行は必ず「5つの要素」を持つ配列にしてください。不足がある場合は空文字("")で埋めてください。
+        - 分数・ページ番号の論理補完（桁落ち厳禁）: 「1/12」がかすれて「1/2」に見えるような「分母の桁落ち」が頻発しています。分母は同じグループ内で共通であることが多いので、前後の行を必ず確認し、論理的に正しい分母を推測して補完してください。
+        - 専門用語への文脈補正: 画像は機械・設備の図面リストです。「ケッチ台車」が「写真事業」に見えるような誤読が発生しています。前後の文脈から専門用語として意味が通るか確認し、不自然な一般名詞には変換しないでください。
+        - 空白・省略記号の引継ぎ: 左側の列で下の行が空白や省略記号（「〃」など）の場合は、必ず直上の行の文字列を引き継いで出力してください。
+        - 整理番号の連番推論: 台帳の通し番号は基本的に1ずつ増えます。かすれて読めない場合でも、直前の行の数字から論理的に連番を補完してください。
         """
-        # GeminiにJSON出力を強制するための設定
         generation_config = {"response_mime_type": "application/json"}
     else:
         prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。余計な挨拶や説明文は一切含めないでください。"
         generation_config = None
 
     total_files = len(files)
+    
+    # --- 集約用マスターデータ変数 ---
+    aggregated_master_header = []
+    aggregated_master_rows = []
+    aggregated_all_texts = []
+
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         try:
@@ -532,29 +573,20 @@ def extract_gemini_task(files):
                 pix = page.get_pixmap(dpi=400)
                 img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
                 
-                if pix.n == 4:
-                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-                elif pix.n == 1:
-                    img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+                if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+                elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 
                 # ===================================================================
                 # 画像前処理パイプライン (OpenCV)
-                # かすれ対策・ノイズ除去を根本から強化
                 # ===================================================================
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                # 1. ノイズ除去
                 denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-                # 2. コントラスト強調 (CLAHE)
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                 enhanced = clahe.apply(denoised)
-                # 3. シャープネス処理（アンシャープマスク）
                 blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
                 sharp = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
-                # 4. モルフォロジー変換（かすれた線の結合・太字化）
-                # 白背景・黒文字環境において、黒を拡張するため erode を使用
                 kernel = np.ones((2, 2), np.uint8)
                 thickened = cv2.erode(sharp, kernel, iterations=1)
-                
                 img = Image.fromarray(cv2.cvtColor(thickened, cv2.COLOR_GRAY2RGB))
                 # ===================================================================
                 
@@ -586,28 +618,40 @@ def extract_gemini_task(files):
                     
                     if out_format in ["xlsx", "csv"]:
                         try:
-                            # 構造化されたJSONを安全にパース
                             data = json.loads(extracted_text)
+                            header = data.get("header", [])
                             rows = data.get("rows", [])
-                            # フォールバック処理
-                            if not rows and isinstance(data, list):
-                                rows = data
+                            
+                            # フォールバック (万が一スキーマが守られなかった場合)
+                            if not header and not rows and isinstance(data, list):
+                                if data:
+                                    header = data[0] if isinstance(data[0], list) else [str(data[0])]
+                                    rows = data[1:]
+                            
+                            safe_header = (header + ["", "", "", "", ""])[:5] if header else []
+                            
+                            # マスターヘッダーをまだ取得していなければ、最初のページのヘッダーを採用
+                            if not aggregated_master_header and any(safe_header):
+                                aggregated_master_header = safe_header
+
+                            # 個別ファイル構築用リスト
+                            page_data_to_write = []
+                            if safe_header: page_data_to_write.append(safe_header)
+                            
+                            for row_data in rows:
+                                if not isinstance(row_data, list): row_data = [str(row_data)]
+                                safe_row = (row_data + ["", "", "", "", ""])[:5]
+                                page_data_to_write.append(safe_row)
+                                aggregated_master_rows.append(safe_row)
 
                             if out_format == "xlsx":
-                                for row_idx, row_data in enumerate(rows, 1):
-                                    if not isinstance(row_data, list):
-                                        row_data = [str(row_data)]
-                                    # JSON配列から強制的に5列を抽出
-                                    safe_row = (row_data + ["", "", "", "", ""])[:5]
-                                    for col_idx, val in enumerate(safe_row, 1):
+                                for row_idx, r_data in enumerate(page_data_to_write, 1):
+                                    for col_idx, val in enumerate(r_data, 1):
                                         ws.cell(row=row_idx, column=col_idx, value=str(val).strip())
                             else: # csv
                                 csv_lines = []
-                                for row_data in rows:
-                                    if not isinstance(row_data, list):
-                                        row_data = [str(row_data)]
-                                    safe_row = (row_data + ["", "", "", "", ""])[:5]
-                                    csv_lines.append(",".join(f'"{str(val).replace('"', '""')}"' if ',' in str(val) or '"' in str(val) else str(val) for val in safe_row))
+                                for r_data in page_data_to_write:
+                                    csv_lines.append(",".join(f'"{str(val).replace('"', '""')}"' if ',' in str(val) or '"' in str(val) else str(val) for val in r_data))
                                 all_text_list.append("\n".join(csv_lines))
 
                         except json.JSONDecodeError as e:
@@ -618,6 +662,7 @@ def extract_gemini_task(files):
                                 all_text_list.append(err_msg)
                     else: # txt
                         all_text_list.append(extracted_text)
+                        aggregated_all_texts.append(extracted_text)
                 else:
                     err_msg = f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\nエラー詳細: {last_error}"
                     if out_format == "xlsx":
@@ -629,6 +674,7 @@ def extract_gemini_task(files):
             doc.close()
             update_file_progress(total_pages, total_pages, "ファイルを保存中...")
             
+            # --- 個別ファイルの保存 ---
             if out_format == "xlsx":
                 wb.save(os.path.join(save_dir, f"{base}_AI抽出.xlsx"))
             elif out_format == "csv":
@@ -641,6 +687,37 @@ def extract_gemini_task(files):
         except Exception as e:
             print(f"AI Task Error: {e}")
             raise e
+
+    # --- 全ファイル処理完了後、集約マスターデータを保存 ---
+    if total_files > 0:
+        save_dir = get_save_dir(files[0])
+        if save_dir:
+            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
+            update_overall_progress(total_files, total_files, "集約データを保存中...")
+            
+            if out_format in ["xlsx", "csv"]:
+                final_aggregated_data = []
+                if aggregated_master_header:
+                    final_aggregated_data.append(aggregated_master_header)
+                final_aggregated_data.extend(aggregated_master_rows)
+
+                if out_format == "xlsx" and final_aggregated_data:
+                    wb_agg = Workbook()
+                    ws_agg = wb_agg.active
+                    ws_agg.title = "集約データ"
+                    for r_idx, row_data in enumerate(final_aggregated_data, 1):
+                        for c_idx, val in enumerate(row_data, 1):
+                            ws_agg.cell(row=r_idx, column=c_idx, value=str(val).strip())
+                    wb_agg.save(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.xlsx"))
+                    
+                elif out_format == "csv" and final_aggregated_data:
+                    with open(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
+                        writer = csv.writer(f_out)
+                        writer.writerows(final_aggregated_data)
+                        
+            elif out_format == "txt" and aggregated_all_texts:
+                with open(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.txt"), "w", encoding="utf-8") as f_out:
+                    f_out.write("\n\n".join(aggregated_all_texts))
 
 def convert_to_excel(files):
     border_style = Side(border_style="thin", color="000000")
@@ -790,7 +867,7 @@ title_frame.pack(pady=(10, 2))
 Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "bold")).pack(side=LEFT)
 Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
 
-info_text = "✨ Update: AIからの出力をJSON化し、列ズレ問題の根本的な排除とかすれ前処理を強化しました。"
+info_text = "✨ Update: AIがカラム(ヘッダー)を自動認識し、純粋なデータ行のみを集約出力します。"
 Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 2))
 
 file_frame = Frame(root, bg=LIGHT)
