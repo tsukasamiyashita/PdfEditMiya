@@ -3,9 +3,7 @@
 PdfEditMiya v1.5.0
 ------------------
 更新情報:
-- v1.5.0: AIの視力を人間に近づけるため、OpenCVによるコントラスト強調・シャープネスの前処理を導入。列ズレをプログラム側で強制補正する安全装置を追加。
-- v1.4.0: メニューバーの設定を廃止し、UIのAPIキー枠に一本化（テストボタン追加）。
-- v1.3.0: 手書き文字抽出に生成AI（Gemini API）を導入、Tesseractとの切り替え対応。
+- v1.5.0: 【根本解決】AI出力をJSONスキーマ化し列ズレを完全排除。OpenCVによる多段画像前処理（ノイズ除去＋かすれ補完モルフォロジー変換）を実装。
 """
 
 import os
@@ -16,6 +14,7 @@ import gc
 import cv2
 import csv
 import time
+import json
 import numpy as np
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox, Menu
@@ -62,16 +61,9 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
 [ v1.5.0 ]
-- 【根本解決】AIへ画像を渡す前にOpenCVでコントラスト強調とシャープネス処理を行い、かすれた文字の視認性を人間レベルに引き上げ
-- Excel出力時に列が不足している場合、強制的に5列に揃える安全装置をプログラム側に実装
-- 理想データの例を直接プロンプトに組み込むFew-Shot手法で推論精度を最大化
-
-[ v1.4.0 ]
-- メニューバーの「設定」を廃止し、メイン画面のAPIキー入力枠に一本化
-- APIキーの「テスト」ボタンを入力枠の横に配置
-
-[ v1.3.0 ]
-- 手書き文字抽出に生成AI（Gemini API）を搭載
+- AI出力をJSON形式に強制（Structured Output）し、カンマ混入による列ズレを根本的に排除。
+- 画像前処理パイプラインを入念化。ノイズ除去とモルフォロジー演算（文字の太字化・結合）を追加し、かすれた文字の抽出精度を飛躍的に向上。
+- プロンプトを改修し、「1/12」などの分母の桁落ちや、「ケッチ台車」等の専門用語の誤変換を文脈から論理補完するよう指示。
 """
 
 AI_HELP_TEXT = """
@@ -83,7 +75,7 @@ AI_HELP_TEXT = """
 2. 「Create API key」ボタンを押し、新しいプロジェクトでAPIキーを作成します。
 3. 発行された文字列（AIza...から始まるもの）をコピーします。
 4. 本アプリの「AI抽出設定」の「APIキー」枠に貼り付け、「テスト」ボタンを押して認証成功と出れば準備完了です。
-※ APIキーはPC内に安全に隠しファイルとして自動保存されるため、GitHub等へ流出することはありません。
+※ APIキーはPC内に安全に隠しファイルとして自動保存されるため、流出することはありません。
 
 ■ Tesseract を使う場合（オフライン・簡易抽出）
 Windows環境にTesseract OCR本体がインストールされている必要があります。
@@ -149,6 +141,7 @@ def test_api_key_ui():
     models_to_try = get_available_models(key)
     success = False
     last_err = ""
+    
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
@@ -166,7 +159,7 @@ def test_api_key_ui():
     else:
         err_msg = last_err.lower()
         if "404" in err_msg or "not found" in err_msg:
-            messagebox.showerror("権限エラー", "APIキーは認識されましたが、AIモデルを利用する権限がありません（404エラー）。\nGoogle AI Studioで新しくキーを作成し直してください。")
+            messagebox.showerror("権限エラー", "APIキーは認識されましたが、AIモデルを利用する権限がありません。\nGoogle AI Studioでキーを作成し直してください。")
         else:
             messagebox.showerror("通信エラー", f"APIキー確認中にエラーが発生しました。\n{last_err}")
 
@@ -331,12 +324,12 @@ def show_history():
     show_text_window("バージョン履歴", VERSION_HISTORY.strip())
 
 def show_readme():
-    readme_path = resource_path("readme.md")
+    readme_path = resource_path("README.md")
     content = ""
     if os.path.exists(readme_path):
         with open(readme_path, "r", encoding="utf-8") as f: content = f.read()
     else:
-        content = "readme.md ファイルが見つかりませんでした。"
+        content = "README.md ファイルが見つかりませんでした。"
     show_text_window("Readme", content)
 
 # ==============================
@@ -491,44 +484,30 @@ def extract_gemini_task(files):
 
     if out_format in ["csv", "xlsx"]:
         prompt = """
-        あなたは優秀なデータ入力オペレーターです。添付された手書きの図面台帳画像を読み取り、正確なCSVデータを作成してください。
-        処理時間はかかっても構いません。かすれた文字や省略記号、行のズレなどを「人間の目」で見るように文脈から推論し、完璧な表データにしてください。
+        あなたは優秀なデータ入力オペレーターです。添付された手書きと印刷が混在する「機械設備・部品図面などの管理台帳（表）」の画像を読み取り、正確なJSONデータを作成してください。
+        処理時間はかかっても構いません。かすれた文字や省略記号、行のズレなどを、全体の文脈と規則性から「人間の目」のように論理的に推論してください。
 
-        【基本ルール】
-        1. 出力は純粋なCSV形式（カンマ区切り）のみ。マークダウン記号(```csv等)や不要な空白行は絶対に含めないでください。
-        2. 各行は必ず「5列（カンマ4つ）」にすること。列ズレは厳禁です。
-        3. 1行目は画像右上のタイトルをE列に配置（例: `,,,,佐渡C振`）。
-        4. 2行目はヘッダーとして `機械名,図面名称,,整理番号,備考` を出力。
+        【出力形式（絶対厳守）】
+        出力は必ず以下のJSONスキーマに従ってください。CSVやマークダウンでのテキスト出力は禁止です。
+        {
+          "rows": [
+            ["列1", "列2", "列3", "列4", "列5"],
+            ["列1", "列2", "列3", "列4", "列5"]
+          ]
+        }
+        ※ 各行は必ず「5つの要素」を持つ配列にしてください。不足がある場合は空文字("")で埋めてください。表のタイトルやヘッダーもこの5列の中に適切に割り当てて格納してください。
 
-        【推論・補完ルール（人間の目でわかること）】
-        - 1列目 (機械名): 下の行が空白や省略記号（〃）になっている場合、直上の行の機械名をそのままコピーしてすべての行を埋めてください。
-        - 2列目 (図面名称): 文脈からあり得ない言葉（「写真事」など）は、「ケッチ台車」や「部品図」「組立図」など、工業・図面の専門用語として論理的に正しい言葉に脳内で変換して出力すること。明確な空白のセルは空欄のままにしてください。「〃」などの省略記号は上の行をコピーします。
-        - 3列目 (ページ・分数): 絶対に日付変換せず、「分子/分母」の形式で出力してください。分子は基本的に1ずつ増えます。分母はブロックごとに共通します。かすれて「/2」に見えても、他の行が「/12」であれば、当然「/12」です。人間の目で前後の行との連続性を確認し、分子が1ずつ増える連番を完璧に推測して補完してください。
-        - 4列目 (整理番号): 「10194」などの5桁の数字です。これは「1行につき必ず1ずつ増える連番」です。画像でかすれて読めない箇所があっても、直前の行の数字に+1をして、絶対に欠損や飛び番がないように出力してください。
-
-        【参考：理想的な出力フォーマット例】
-        ※以下の例の構造・文脈の推論方法を参考にしつつ、実際の画像の内容を抽出してください。
-        ,,,,佐渡C振
-        機械名,図面名称,,整理番号,備考
-        No1送り改造,組立図,1/12,10194,
-        No1送り改造,ケッチ台車,2/12,10195,
-        No1送り改造,チェーン送り,3/12,10196,
-        No1送り改造,チェーンコンベア駆動部改造,4/12,10197,
-        No1送り改造,部品図,5/12,10198,
-        No1送り改造,部品図,6/12,10199,
-        No1送り改造,部品図,7/12,10200,
-        No1送り改造,LS取付,8/12,10201,
-        No1送り改造,部品図,9/12,10202,
-        No1送り改造,部品図,10/12,10203,
-        No1送り改造,部品図,11/12,10204,
-        No1送り改造,部品図,12/12,10205,
-        No.2 修理組立説明図,,1/4,10206,
-        No.2 修理組立説明図,,2/4,10207,
-        No.2 修理組立説明図,,3/4,10208,
-        No.2 修理組立説明図,部品図,4/4,10209,
+        【誤認識防止と汎用的な推論ルール（最重要）】
+        - 分数・ページ番号の論理補完（桁落ち厳禁）: 「1/12」がかすれて「1/2」に見えるような「分母の桁落ち」が頻発しています。分母は同じグループ内で共通であることが多いので、前後の行を必ず確認し、論理的に正しい分母を推測して補完してください。分子は基本的に1ずつ増えます。
+        - 専門用語への文脈補正と誤変換防止: 画像は機械・設備の図面リストです。手書きのクセにより「ケッチ台車」が「写真事業」に見えるような誤読が発生しています。前後の文脈から「機械・部品・図面・設備」に関する専門用語として意味が通るか確認し、不自然な一般名詞には変換しないでください。形状が似ている専門用語を採用してください。
+        - 空白・省略記号の引継ぎ: 左側の列で、下の行が空白や省略記号（「〃」など）の場合は、必ず「直上の行の文字列」を引き継いで出力してください。
+        - 整理番号の連番推論: 台帳の通し番号は基本的に「1ずつ増える連番」です。かすれて読めない場合でも、直前の行の数字から論理的に連番を補完し、欠損や飛び番を防いでください。
         """
+        # GeminiにJSON出力を強制するための設定
+        generation_config = {"response_mime_type": "application/json"}
     else:
         prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。余計な挨拶や説明文は一切含めないでください。"
+        generation_config = None
 
     total_files = len(files)
     for i, f in enumerate(files, 1):
@@ -559,18 +538,24 @@ def extract_gemini_task(files):
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 
                 # ===================================================================
-                # 【根本解決】AIの視力を人間に近づけるための画像前処理 (OpenCV)
-                # かすれた「1/12」などをくっきりと認識させるためのコントラスト・シャープネス強調
+                # 画像前処理パイプライン (OpenCV)
+                # かすれ対策・ノイズ除去を根本から強化
                 # ===================================================================
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                # 適応的ヒストグラム平坦化 (CLAHE) で、薄い文字のコントラストを強力に強調
-                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-                enhanced = clahe.apply(gray)
-                # アンシャープマスクで文字の輪郭（エッジ）をくっきりさせる
+                # 1. ノイズ除去
+                denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
+                # 2. コントラスト強調 (CLAHE)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                enhanced = clahe.apply(denoised)
+                # 3. シャープネス処理（アンシャープマスク）
                 blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
                 sharp = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+                # 4. モルフォロジー変換（かすれた線の結合・太字化）
+                # 白背景・黒文字環境において、黒を拡張するため erode を使用
+                kernel = np.ones((2, 2), np.uint8)
+                thickened = cv2.erode(sharp, kernel, iterations=1)
                 
-                img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
+                img = Image.fromarray(cv2.cvtColor(thickened, cv2.COLOR_GRAY2RGB))
                 # ===================================================================
                 
                 max_retries = 3
@@ -581,7 +566,11 @@ def extract_gemini_task(files):
                         update_file_progress(page_num + 1, text=f"AIが解析中... ( {page_num+1} / {total_pages} ページ ) [使用: {model_name}]")
                         try:
                             model = genai.GenerativeModel(model_name)
-                            response = model.generate_content([prompt, img])
+                            if generation_config:
+                                response = model.generate_content([prompt, img], generation_config=generation_config)
+                            else:
+                                response = model.generate_content([prompt, img])
+                            
                             if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
                             extracted_text = response.text.strip()
                             success, used_model = True, model_name
@@ -594,25 +583,40 @@ def extract_gemini_task(files):
 
                 if success:
                     update_file_progress(page_num + 1, text=f"解析成功！ [モデル: {used_model}]")
-                    # 不要なマークダウン等を除去
-                    lines = extracted_text.split('\n')
-                    clean_lines = []
-                    for line in lines:
-                        line = line.strip()
-                        if line.startswith('```') or line.startswith('|'):
-                            continue
-                        if line:
-                            clean_lines.append(line)
-                    extracted_text = '\n'.join(clean_lines)
                     
-                    if out_format == "xlsx":
-                        reader = csv.reader(io.StringIO(extracted_text))
-                        for row_idx, row in enumerate(reader, 1):
-                            # ★プログラムによる安全装置：列が不足している場合、強制的に空欄で埋めて5列に揃える
-                            safe_row = (row + ["", "", "", "", ""])[:5]
-                            for col_idx, val in enumerate(safe_row, 1):
-                                ws.cell(row=row_idx, column=col_idx, value=val.strip())
-                    else:
+                    if out_format in ["xlsx", "csv"]:
+                        try:
+                            # 構造化されたJSONを安全にパース
+                            data = json.loads(extracted_text)
+                            rows = data.get("rows", [])
+                            # フォールバック処理
+                            if not rows and isinstance(data, list):
+                                rows = data
+
+                            if out_format == "xlsx":
+                                for row_idx, row_data in enumerate(rows, 1):
+                                    if not isinstance(row_data, list):
+                                        row_data = [str(row_data)]
+                                    # JSON配列から強制的に5列を抽出
+                                    safe_row = (row_data + ["", "", "", "", ""])[:5]
+                                    for col_idx, val in enumerate(safe_row, 1):
+                                        ws.cell(row=row_idx, column=col_idx, value=str(val).strip())
+                            else: # csv
+                                csv_lines = []
+                                for row_data in rows:
+                                    if not isinstance(row_data, list):
+                                        row_data = [str(row_data)]
+                                    safe_row = (row_data + ["", "", "", "", ""])[:5]
+                                    csv_lines.append(",".join(f'"{str(val).replace('"', '""')}"' if ',' in str(val) or '"' in str(val) else str(val) for val in safe_row))
+                                all_text_list.append("\n".join(csv_lines))
+
+                        except json.JSONDecodeError as e:
+                            err_msg = f"[ --- ページ {page_num+1} の解析結果が不正です --- ]\n詳細: {e}\n出力:\n{extracted_text}"
+                            if out_format == "xlsx":
+                                ws.cell(row=1, column=1, value=err_msg)
+                            else:
+                                all_text_list.append(err_msg)
+                    else: # txt
                         all_text_list.append(extracted_text)
                 else:
                     err_msg = f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\nエラー詳細: {last_error}"
@@ -786,7 +790,7 @@ title_frame.pack(pady=(10, 2))
 Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "bold")).pack(side=LEFT)
 Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
 
-info_text = "✨ Update: AI抽出のプロンプトを再構築し、列ズレ・白紙出力等を解消しました。"
+info_text = "✨ Update: AIからの出力をJSON化し、列ズレ問題の根本的な排除とかすれ前処理を強化しました。"
 Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 2))
 
 file_frame = Frame(root, bg=LIGHT)
