@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.6.0
+PdfEditMiya v1.8.0
 ------------------
 更新情報:
-- v1.6.0: 
-  【新機能】AIに「ヘッダー」と「データ」を分離認識させるJSONスキーマを導入。
-  【改善】表のタイトルや表外の無関係なデータを自動で無視し、純粋なデータ行のみを集約ファイルに連結するようアーキテクチャを刷新。
-- v1.5.0: AI出力をJSONスキーマ化し列ズレを完全排除。OpenCVによる多段画像前処理を実装。抽出データの集約出力機能を追加。
+- v1.8.0: 
+  【完全解決】AIに「整合性の自動分析（Chain of Thought）」を強制する推論スキーマを導入し、空白セルの見落としによる列ズレを根本的に排除。
+  【強化】1ページ目で自動検出したカラム構造を「マスターキー」として記憶し、全ページのデータを縦に強制同期させるマッピング処理を実装。
+  【UI】カラーパレットと余白を再調整し、より洗練されたプロフェッショナルなフラットデザインへ進化。
 """
 
 import os
@@ -19,9 +19,8 @@ import csv
 import time
 import json
 import numpy as np
-from tkinter import *
+import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
-from tkinter.simpledialog import askstring
 import tkinter.scrolledtext as st
 from PyPDF2 import PdfReader, PdfWriter
 import pdfplumber
@@ -45,33 +44,35 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # ==============================
-# 基本設定
+# 基本設定 & 洗練されたカラーパレット
 # ==============================
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.6.0"
-WINDOW_WIDTH = 680
-WINDOW_HEIGHT = 860
+VERSION = "v1.8.0"
+WINDOW_WIDTH = 700
+WINDOW_HEIGHT = 890
 
-PRIMARY = "#1565C0"
-LIGHT = "#E3F2FD"
-SUCCESS = "#2E7D32"
-ERROR = "#C62828"
-INACTIVE = "#90A4AE"
-INFO_TEXT = "#455A64"
+BG_COLOR = "#F0F4F8"          # 柔らかいブルーグレーの背景
+CARD_BG = "#FFFFFF"           # 純白のカード背景
+PRIMARY = "#0D6EFD"           # 鮮やかなモダンブルー
+PRIMARY_HOVER = "#0B5ED7"     # ホバー時の濃いブルー
+TEXT_COLOR = "#212529"        # 視認性の高いダークグレー
+MUTED_TEXT = "#6C757D"        # 落ち着いたサブテキスト
+BORDER_COLOR = "#DEE2E6"      # 薄い境界線
+SUCCESS = "#198754"           # 成功時のグリーン
+ERROR = "#DC3545"             # エラー時のレッド
 
 USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
-[ v1.6.0 ]
-- AIが表の「カラム（ヘッダー）」と「データ行」を自動で分離・認識するように推論ロジックを改良。
-- カラムより上にある表タイトルや日付等の無関係なデータを完全に無視・除外する機能を実装。
-- 集約データ作成時、一番上にカラム名を1行だけ配置し、以降は純粋なデータ行のみを連結した綺麗なマスターデータになるよう改善。
+[ v1.8.0 ]
+- 【列ズレの根本的解決】AIに「各列の意味と空白の発生箇所」を事前分析させる自己推論（Chain of Thought）スキーマを実装しました。
+- 【縦列の強制同期】集約データの出力時、1ページ目のヘッダー構造をマスターとして全行を強制マッピングし、ページ間のズレを防ぐ強固なアーキテクチャを追加しました。
+- 【UIの洗練】余白やカラーパレットを見直し、よりプロフェッショナルで直感的なデザインに仕上げました。
 
-[ v1.5.0 ]
-- AI出力をJSON形式に強制し、カンマ混入による列ズレを根本的に排除。
-- 画像前処理（ノイズ除去＋かすれ補完）による精度向上。
-- 集約データ自動生成機能を追加。
+[ v1.7.0 ]
+- アニメーション付きプログレスバーを導入。
+- ttkを用いたモダンなカード風デザインへのリファクタリング。
 """
 
 AI_HELP_TEXT = """
@@ -81,16 +82,12 @@ AI_HELP_TEXT = """
 1. 以下のURLにアクセスし、Googleアカウントでログインします。
    https://aistudio.google.com/app/apikey
 2. 「Create API key」ボタンを押し、新しいプロジェクトでAPIキーを作成します。
-3. 発行された文字列（AIza...から始まるもの）をコピーします。
-4. 本アプリの「AI抽出設定」の「APIキー」枠に貼り付け、「テスト」ボタンを押して認証成功と出れば準備完了です。
-※ APIキーはPC内に安全に隠しファイルとして自動保存されるため、流出することはありません。
+3. 発行された文字列をコピーし、本アプリの「APIキー」枠に貼り付け「テスト」ボタンを押してください。
 
 ■ Tesseract を使う場合（オフライン・簡易抽出）
 Windows環境にTesseract OCR本体がインストールされている必要があります。
-1. 以下のサイト等からWindows用のインストーラーをダウンロードし、インストールします。
-   https://github.com/UB-Mannheim/tesseract/wiki
-2. インストール時、「Additional language data (download)」を展開し、「Japanese」に必ずチェックを入れてください。
-3. インストール先のパス（例: C:\\Program Files\\Tesseract-OCR）に環境変数(Path)を通すか、PCを再起動してください。
+1. https://github.com/UB-Mannheim/tesseract/wiki からダウンロード・インストール。
+2. インストール時、「Additional language data (download)」から「Japanese」を選択してください。
 """
 
 # ==============================
@@ -166,7 +163,7 @@ def test_api_key_ui():
     else:
         err_msg = last_err.lower()
         if "404" in err_msg or "not found" in err_msg:
-            messagebox.showerror("権限エラー", "APIキーは認識されましたが、AIモデルを利用する権限がありません。\nGoogle AI Studioでキーを作成し直してください。")
+            messagebox.showerror("権限エラー", "APIキーは認識されましたが、AIモデルを利用権限がありません。")
         else:
             messagebox.showerror("通信エラー", f"APIキー確認中にエラーが発生しました。\n{last_err}")
 
@@ -223,11 +220,11 @@ def run_task(func):
         func(files)
         close_processing()
         if not cancelled:
-            show_message("✅ 完了", SUCCESS)
+            show_message("✅ 処理が完了しました", SUCCESS)
     except Exception as e:
         print(f"Error: {e}")
         close_processing()
-        show_message("❌ エラー発生", ERROR)
+        show_message("❌ エラーが発生しました", ERROR)
 
 def safe_run(func):
     files = get_target_files()
@@ -243,40 +240,44 @@ def safe_run(func):
     threading.Thread(target=run_task, args=(func,), daemon=True).start()
 
 # ==============================
-# UI補助機能
+# UI補助・プログレス機能
 # ==============================
 def show_message(msg, color=PRIMARY):
     def _task():
-        win = Toplevel(root)
-        win.geometry("220x90")
-        win.configure(bg=LIGHT)
+        win = tk.Toplevel(root)
+        win.geometry("260x90")
+        win.configure(bg=CARD_BG)
         win.attributes("-topmost", True)
-        x = root.winfo_x() + (WINDOW_WIDTH // 2) - 110
+        x = root.winfo_x() + (WINDOW_WIDTH // 2) - 130
         y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 45
         win.geometry(f"+{x}+{y}")
-        Label(win, text=msg, bg=LIGHT, fg=color, font=("Segoe UI", 12, "bold")).pack(expand=True)
-        win.after(2500, win.destroy)
+        win.overrideredirect(True)
+        
+        frame = tk.Frame(win, bg=CARD_BG, highlightbackground=color, highlightthickness=2)
+        frame.pack(expand=True, fill=tk.BOTH)
+        ttk.Label(frame, text=msg, foreground=color, font=("Segoe UI", 11, "bold"), background=CARD_BG).pack(expand=True)
+        win.after(2200, win.destroy)
     root.after(0, _task)
 
 def show_processing(total_files=1):
     global processing_popup, overall_label, overall_progress, file_label, file_progress
-    processing_popup = Toplevel(root)
-    processing_popup.title("処理中")
-    processing_popup.geometry("400x180")
-    processing_popup.configure(bg=LIGHT)
+    processing_popup = tk.Toplevel(root)
+    processing_popup.title("処理を実行中...")
+    processing_popup.geometry("440x210")
+    processing_popup.configure(bg=CARD_BG)
     processing_popup.grab_set()
-    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 200
-    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 90
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 220
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 105
     processing_popup.geometry(f"+{x}+{y}")
     
-    overall_label = Label(processing_popup, text=f"全体の進捗 ( 0 / {total_files} ファイル )", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"))
-    overall_label.pack(pady=(15, 2))
-    overall_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_files, length=340)
-    overall_progress.pack(pady=(0, 10))
+    overall_label = ttk.Label(processing_popup, text=f"全体の進捗 ( 0 / {total_files} ファイル )", font=("Segoe UI", 10, "bold"), background=CARD_BG, foreground=PRIMARY)
+    overall_label.pack(pady=(25, 5))
+    overall_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_files, length=380)
+    overall_progress.pack(pady=(0, 20))
     
-    file_label = Label(processing_popup, text="現在のファイルを準備中...", bg=LIGHT, fg=INFO_TEXT, font=("Segoe UI", 9))
-    file_label.pack(pady=(5, 2))
-    file_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=1, length=340)
+    file_label = ttk.Label(processing_popup, text="現在のファイルを準備中...", font=("Segoe UI", 9), background=CARD_BG, foreground=MUTED_TEXT)
+    file_label.pack(pady=(5, 5))
+    file_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=1, length=380)
     file_progress.pack(pady=(0, 10))
 
 def close_processing():
@@ -293,50 +294,48 @@ def update_overall_progress(step, max_val=None, text=None):
             if max_val is not None: overall_progress["maximum"] = max_val
             overall_progress["value"] = step
             if text: overall_label.config(text=text)
-            overall_progress.update()
     root.after(0, _task)
 
-def update_file_progress(step, max_val=None, text=None):
+def set_file_progress_indeterminate(text=None):
     def _task():
         if processing_popup and processing_popup.winfo_exists():
+            file_progress.config(mode="indeterminate")
+            file_progress.start(15)
+            if text: file_label.config(text=text)
+    root.after(0, _task)
+
+def set_file_progress_determinate(step, max_val=None, text=None):
+    def _task():
+        if processing_popup and processing_popup.winfo_exists():
+            file_progress.stop()
+            file_progress.config(mode="determinate")
             if max_val is not None: file_progress["maximum"] = max_val
             file_progress["value"] = step
             if text: file_label.config(text=text)
-            file_progress.update()
     root.after(0, _task)
 
 # ==============================
 # メニューバー機能
 # ==============================
 def show_text_window(title, content):
-    win = Toplevel(root)
+    win = tk.Toplevel(root)
     win.title(title)
-    win.geometry("580x450")
-    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 290
-    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 225
+    win.geometry("620x500")
+    win.configure(bg=BG_COLOR)
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 310
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 250
     win.geometry(f"+{x}+{y}")
-    text_area = st.ScrolledText(win, wrap=WORD, font=("Meiryo UI", 10))
-    text_area.pack(expand=True, fill=BOTH, padx=10, pady=10)
-    text_area.insert(END, content)
-    text_area.configure(state=DISABLED)
+    text_area = st.ScrolledText(win, wrap=tk.WORD, font=("Meiryo UI", 10), bg=CARD_BG, fg=TEXT_COLOR, relief=tk.FLAT, padx=15, pady=15)
+    text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+    text_area.insert(tk.END, content)
+    text_area.configure(state=tk.DISABLED)
 
-def show_ai_help():
-    show_text_window("AI抽出の準備 (使い方)", AI_HELP_TEXT.strip())
-
-def show_version_info():
-    msg = f"{APP_TITLE}\nバージョン: {VERSION}\n\nPython & Tkinter製 PDF編集ツール"
-    messagebox.showinfo("バージョン情報", msg)
-
-def show_history():
-    show_text_window("バージョン履歴", VERSION_HISTORY.strip())
-
+def show_ai_help(): show_text_window("AI抽出の準備 (使い方)", AI_HELP_TEXT.strip())
+def show_version_info(): messagebox.showinfo("バージョン情報", f"{APP_TITLE}\nバージョン: {VERSION}\n\nPython & Tkinter製 PDF編集ツール")
+def show_history(): show_text_window("バージョン履歴", VERSION_HISTORY.strip())
 def show_readme():
-    readme_path = resource_path("README.md")
-    content = ""
-    if os.path.exists(readme_path):
-        with open(readme_path, "r", encoding="utf-8") as f: content = f.read()
-    else:
-        content = "README.md ファイルが見つかりませんでした。"
+    p = resource_path("README.md")
+    content = open(p, "r", encoding="utf-8").read() if os.path.exists(p) else "READMEが見つかりません。"
     show_text_window("Readme", content)
 
 # ==============================
@@ -351,9 +350,9 @@ def merge_pdfs(files):
         reader = PdfReader(f)
         total_pages = len(reader.pages)
         for j, p in enumerate(reader.pages, 1):
-            update_file_progress(j, total_pages, f"ファイルを結合中... ( {j} / {total_pages} ページ )")
+            set_file_progress_determinate(j, total_pages, f"ファイルを結合中... ( {j} / {total_pages} ページ )")
             writer.add_page(p)
-    update_file_progress(1, 1, "PDFを保存中...")
+    set_file_progress_determinate(1, 1, "PDFを保存中...")
     save_dir = get_save_dir(files[0])
     if save_dir:
         name = os.path.basename(selected_folder) if selected_folder else "Merged"
@@ -370,7 +369,7 @@ def split_pdfs(files):
         base = os.path.splitext(os.path.basename(f))[0]
         total_pages = len(reader.pages)
         for n, p in enumerate(reader.pages, 1):
-            update_file_progress(n, total_pages, f"ファイルを分割中... ( {n} / {total_pages} ページ )")
+            set_file_progress_determinate(n, total_pages, f"ファイルを分割中... ( {n} / {total_pages} ページ )")
             writer = PdfWriter()
             writer.add_page(p)
             with open(os.path.join(save_dir, f"{base}_Split_{n}.pdf"), "wb") as out:
@@ -385,7 +384,7 @@ def rotate_pdfs(files):
         writer = PdfWriter()
         total_pages = len(reader.pages)
         for j, p in enumerate(reader.pages, 1):
-            update_file_progress(j, total_pages, f"ページを回転中... ( {j} / {total_pages} ページ )")
+            set_file_progress_determinate(j, total_pages, f"ページを回転中... ( {j} / {total_pages} ページ )")
             p.rotate(deg)
             writer.add_page(p)
         save_dir = get_save_dir(f)
@@ -402,7 +401,7 @@ def extract_text(files):
         total_pages = len(reader.pages)
         text_list = []
         for j, p in enumerate(reader.pages, 1):
-            update_file_progress(j, total_pages, f"テキストを抽出中... ( {j} / {total_pages} ページ )")
+            set_file_progress_determinate(j, total_pages, f"テキストを抽出中... ( {j} / {total_pages} ページ )")
             text_list.append(p.extract_text() or "")
         text = "".join(text_list)
         save_dir = get_save_dir(f)
@@ -412,7 +411,7 @@ def extract_text(files):
             out.write(text)
 
 # ==============================
-# AI抽出ロジック (ヘッダー分離・集約機能付き)
+# AI抽出ロジック (Chain of Thought & マスターキー強制同期)
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -430,7 +429,6 @@ def run_ai_extraction():
 def extract_tesseract_task(files):
     out_format = output_format_var.get()
     total_files = len(files)
-    
     aggregated_all_rows = []
     aggregated_all_texts = []
     
@@ -440,6 +438,7 @@ def extract_tesseract_task(files):
             save_dir = get_save_dir(f)
             if not save_dir: return
             base = os.path.splitext(os.path.basename(f))[0]
+            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             
@@ -448,7 +447,7 @@ def extract_tesseract_task(files):
             all_text_list = []
             
             for page_num in range(total_pages):
-                update_file_progress(page_num + 1, total_pages, f"Tesseractで解析中... ( {page_num+1} / {total_pages} ページ )")
+                set_file_progress_indeterminate(f"Tesseractで解析中... ( {page_num+1} / {total_pages} ページ )")
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=300)
                 mode = "RGB" if pix.n == 3 else "L"
@@ -460,10 +459,10 @@ def extract_tesseract_task(files):
                         ws = wb.create_sheet(f"Page_{page_num+1}")
                         for row_idx, line in enumerate(text.split('\n'), 1):
                             ws.cell(row=row_idx, column=1, value=line.strip())
-                            aggregated_all_rows.append([line.strip()])
+                            aggregated_all_rows.append([filename, line.strip()])
                     else:
                         all_text_list.append(text)
-                        aggregated_all_texts.append(text)
+                        aggregated_all_texts.append(f"[{filename}] {text}")
                 except Exception as e:
                     err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
                     if out_format == "xlsx":
@@ -471,10 +470,10 @@ def extract_tesseract_task(files):
                         ws.cell(row=1, column=1, value=err_msg)
                     else:
                         all_text_list.append(err_msg)
-                gc.collect()
             
             doc.close()
-            update_file_progress(total_pages, total_pages, "ファイルを保存中...")
+            gc.collect()
+            set_file_progress_determinate(total_pages, total_pages, "ファイルを保存中...")
             
             if out_format == "xlsx":
                 wb.save(os.path.join(save_dir, f"{base}_Tesseract抽出.xlsx"))
@@ -489,19 +488,21 @@ def extract_tesseract_task(files):
             print(f"Tesseract Error: {e}")
             raise e
 
-    # Tesseractの集約処理 (テキスト構造解析が困難なため、全行結合のみ)
     if total_files > 0:
         save_dir = get_save_dir(files[0])
         if save_dir:
             agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            update_overall_progress(total_files, total_files, "集約データを保存中...")
+            set_file_progress_indeterminate("集約データを保存中...")
             
             if out_format == "xlsx" and aggregated_all_rows:
                 wb_agg = Workbook()
                 ws_agg = wb_agg.active
                 ws_agg.title = "集約データ"
-                for r_idx, row_data in enumerate(aggregated_all_rows, 1):
+                ws_agg.cell(row=1, column=1, value="元ファイル名")
+                ws_agg.cell(row=1, column=2, value="抽出テキスト")
+                for r_idx, row_data in enumerate(aggregated_all_rows, 2):
                     ws_agg.cell(row=r_idx, column=1, value=row_data[0])
+                    ws_agg.cell(row=r_idx, column=2, value=row_data[1])
                 wb_agg.save(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.xlsx"))
                 
             elif out_format in ["csv", "txt"] and aggregated_all_texts:
@@ -517,38 +518,35 @@ def extract_gemini_task(files):
 
     if out_format in ["csv", "xlsx"]:
         prompt = """
-        あなたは優秀なデータ入力オペレーターです。添付された手書きと印刷が混在する「機械設備・部品図面などの管理台帳（表）」の画像を読み取り、正確なJSONデータを作成してください。
+        あなたは優秀なデータ入力オペレーターです。添付された図面管理台帳などの表画像を読み取り、正確なJSONデータを作成してください。
         
-        【出力形式とカラムの自動認識（絶対厳守）】
-        出力は必ず以下のJSONスキーマに従ってください。CSVやマークダウンでのテキスト出力は禁止です。
+        【整合性の自動分析と列ズレ防止（Chain of Thought）】
+        いきなりデータを抽出するのではなく、必ず以下のステップで処理してください。
+        1. まず画像内の表を分析し、`table_analysis` フィールドに「この表は何列あるか。各列にはどのような意味のデータが入るか（例：1列目は通番、2列目は図番、3列目は空白が多い備考欄…）」を分析・定義してください。
+        2. 分析結果に基づき、`header` フィールドにカラム名（ヘッダー）を `col1`, `col2`, `col3`... というキーで定義してください。
+        3. `rows` フィールドには各行のデータを格納しますが、必ず `header` と完全に一致する `col1`, `col2`... をキーとする辞書型にしてください。
+        
+        ※ 最初に「各列の定義」を推論させることで、空白セルを読み飛ばして列が左にずれてしまう現象を根本的に防ぎます。罫線を視覚的に分析し、データが存在しないセルには必ず `""`（空文字）を該当キーにセットしてください。
+
+        【出力形式（絶対厳守）】
         {
-          "header": ["列1名", "列2名", "列3名", "列4名", "列5名"],
+          "table_analysis": "各列の意味や空白が発生しやすい箇所の分析結果",
+          "header": { "col1": "列1名", "col2": "列2名", "col3": "列3名", ... },
           "rows": [
-            ["データ1", "データ2", "データ3", "データ4", "データ5"],
-            ["データ1", "データ2", "データ3", "データ4", "データ5"]
+            { "col1": "データ", "col2": "データ", "col3": "", ... }
           ]
         }
-        ※ 画像の中から「表のカラム（ヘッダー行）」を自動認識し、その名前を "header" に配列として格納してください。
-        ※ そのカラムより下にある実際の「データ行」のみを "rows" に格納してください。
-        ※ 【重要】カラム（表のヘッダー）より上にある「表のタイトル」「日付」「ページ番号」「注記」など、表のデータそのものに無関係な文字列は、完全に無視して出力から除外してください。
-
-        【誤認識防止と汎用的な推論ルール（最重要）】
-        - 各行は必ず「5つの要素」を持つ配列にしてください。不足がある場合は空文字("")で埋めてください。
-        - 分数・ページ番号の論理補完（桁落ち厳禁）: 「1/12」がかすれて「1/2」に見えるような「分母の桁落ち」が頻発しています。分母は同じグループ内で共通であることが多いので、前後の行を必ず確認し、論理的に正しい分母を推測して補完してください。
-        - 専門用語への文脈補正: 画像は機械・設備の図面リストです。「ケッチ台車」が「写真事業」に見えるような誤読が発生しています。前後の文脈から専門用語として意味が通るか確認し、不自然な一般名詞には変換しないでください。
-        - 空白・省略記号の引継ぎ: 左側の列で下の行が空白や省略記号（「〃」など）の場合は、必ず直上の行の文字列を引き継いで出力してください。
-        - 整理番号の連番推論: 台帳の通し番号は基本的に1ずつ増えます。かすれて読めない場合でも、直前の行の数字から論理的に連番を補完してください。
         """
         generation_config = {"response_mime_type": "application/json"}
     else:
-        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。余計な挨拶や説明文は一切含めないでください。"
+        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。"
         generation_config = None
 
     total_files = len(files)
     
-    # --- 集約用マスターデータ変数 ---
     aggregated_master_header = []
     aggregated_master_rows = []
+    master_col_keys = [] # 集約ファイル用のグローバル基準キー
     aggregated_all_texts = []
 
     for i, f in enumerate(files, 1):
@@ -558,6 +556,7 @@ def extract_gemini_task(files):
             if not save_dir: return
             
             base = os.path.splitext(os.path.basename(f))[0]
+            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             
@@ -566,36 +565,30 @@ def extract_gemini_task(files):
             all_text_list = []
             
             for page_num in range(total_pages):
-                update_file_progress(page_num + 1, total_pages, f"AIが画像を補正中... ( {page_num+1} / {total_pages} ページ )")
+                set_file_progress_determinate(0, 100, f"AIが画像を補正中... ( {page_num+1} / {total_pages} ページ )")
                 ws = wb.create_sheet(f"Page_{page_num+1}") if wb else None
                 
                 page = doc[page_num]
-                pix = page.get_pixmap(dpi=400)
+                pix = page.get_pixmap(dpi=300)
                 img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
                 
                 if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
                 elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 
-                # ===================================================================
-                # 画像前処理パイプライン (OpenCV)
-                # ===================================================================
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
+                denoised = cv2.medianBlur(gray, 3) 
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                 enhanced = clahe.apply(denoised)
                 blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
                 sharp = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
-                kernel = np.ones((2, 2), np.uint8)
-                thickened = cv2.erode(sharp, kernel, iterations=1)
-                img = Image.fromarray(cv2.cvtColor(thickened, cv2.COLOR_GRAY2RGB))
-                # ===================================================================
+                img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
                 
                 max_retries = 3
                 extracted_text, success, last_error, used_model = "", False, "", ""
 
                 for attempt in range(max_retries):
                     for model_name in models_to_try:
-                        update_file_progress(page_num + 1, text=f"AIが解析中... ( {page_num+1} / {total_pages} ページ ) [使用: {model_name}]")
+                        set_file_progress_indeterminate(f"AIが整合性を分析・解析中... ( {page_num+1} / {total_pages} ページ )")
                         try:
                             model = genai.GenerativeModel(model_name)
                             if generation_config:
@@ -614,44 +607,56 @@ def extract_gemini_task(files):
                     time.sleep(2 ** attempt)
 
                 if success:
-                    update_file_progress(page_num + 1, text=f"解析成功！ [モデル: {used_model}]")
+                    set_file_progress_determinate(100, 100, f"解析成功！ [モデル: {used_model}]")
                     
                     if out_format in ["xlsx", "csv"]:
                         try:
                             data = json.loads(extracted_text)
-                            header = data.get("header", [])
-                            rows = data.get("rows", [])
                             
-                            # フォールバック (万が一スキーマが守られなかった場合)
-                            if not header and not rows and isinstance(data, list):
-                                if data:
-                                    header = data[0] if isinstance(data[0], list) else [str(data[0])]
-                                    rows = data[1:]
+                            header_dict = data.get("header", {})
+                            if isinstance(header_dict, dict) and header_dict:
+                                # col1, col2, col3 の順にソート
+                                col_keys = sorted(header_dict.keys(), key=lambda x: int(x.replace('col', '')) if x.startswith('col') and x[3:].isdigit() else 999)
+                                safe_header = [str(header_dict.get(k, "")).strip() for k in col_keys]
+                            else:
+                                col_keys = ["col1", "col2", "col3", "col4", "col5"]
+                                safe_header = ["", "", "", "", ""]
                             
-                            safe_header = (header + ["", "", "", "", ""])[:5] if header else []
-                            
-                            # マスターヘッダーをまだ取得していなければ、最初のページのヘッダーを採用
+                            # マスターヘッダーの登録（最初の有効なページを基準とする）
                             if not aggregated_master_header and any(safe_header):
-                                aggregated_master_header = safe_header
+                                aggregated_master_header = ["元ファイル名"] + safe_header
+                                master_col_keys = col_keys
 
-                            # 個別ファイル構築用リスト
+                            # 個別ファイル用の書き込みデータ
                             page_data_to_write = []
-                            if safe_header: page_data_to_write.append(safe_header)
+                            if any(safe_header):
+                                page_data_to_write.append(safe_header)
                             
+                            rows = data.get("rows", [])
                             for row_data in rows:
-                                if not isinstance(row_data, list): row_data = [str(row_data)]
-                                safe_row = (row_data + ["", "", "", "", ""])[:5]
-                                page_data_to_write.append(safe_row)
-                                aggregated_master_rows.append(safe_row)
+                                if isinstance(row_data, dict):
+                                    # 個別ファイル: そのページの構造に合わせて出力
+                                    safe_row_local = [str(row_data.get(k, "")).strip() for k in col_keys]
+                                    page_data_to_write.append(safe_row_local)
+                                    
+                                    # 集約ファイル: マスターキーに沿って強制同期マッピング
+                                    used_master_keys = master_col_keys if master_col_keys else col_keys
+                                    safe_row_master = [str(row_data.get(k, "")).strip() for k in used_master_keys]
+                                    aggregated_master_rows.append([filename] + safe_row_master)
+                                    
+                                elif isinstance(row_data, list): # 万が一配列が返ってきた場合のフォールバック
+                                    safe_row = (row_data + [""] * len(col_keys))[:len(col_keys)]
+                                    page_data_to_write.append(safe_row)
+                                    aggregated_master_rows.append([filename] + safe_row)
 
                             if out_format == "xlsx":
                                 for row_idx, r_data in enumerate(page_data_to_write, 1):
                                     for col_idx, val in enumerate(r_data, 1):
-                                        ws.cell(row=row_idx, column=col_idx, value=str(val).strip())
+                                        ws.cell(row=row_idx, column=col_idx, value=val)
                             else: # csv
                                 csv_lines = []
                                 for r_data in page_data_to_write:
-                                    csv_lines.append(",".join(f'"{str(val).replace('"', '""')}"' if ',' in str(val) or '"' in str(val) else str(val) for val in r_data))
+                                    csv_lines.append(",".join(f'"{val.replace('"', '""')}"' if ',' in val or '"' in val else val for val in r_data))
                                 all_text_list.append("\n".join(csv_lines))
 
                         except json.JSONDecodeError as e:
@@ -662,19 +667,18 @@ def extract_gemini_task(files):
                                 all_text_list.append(err_msg)
                     else: # txt
                         all_text_list.append(extracted_text)
-                        aggregated_all_texts.append(extracted_text)
+                        aggregated_all_texts.append(f"[{filename}] {extracted_text}")
                 else:
                     err_msg = f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\nエラー詳細: {last_error}"
                     if out_format == "xlsx":
                         ws.cell(row=1, column=1, value=err_msg)
                     else:
                         all_text_list.append(err_msg)
-                gc.collect()
             
             doc.close()
-            update_file_progress(total_pages, total_pages, "ファイルを保存中...")
+            gc.collect()
+            set_file_progress_determinate(total_pages, total_pages, "ファイルを保存中...")
             
-            # --- 個別ファイルの保存 ---
             if out_format == "xlsx":
                 wb.save(os.path.join(save_dir, f"{base}_AI抽出.xlsx"))
             elif out_format == "csv":
@@ -688,12 +692,11 @@ def extract_gemini_task(files):
             print(f"AI Task Error: {e}")
             raise e
 
-    # --- 全ファイル処理完了後、集約マスターデータを保存 ---
     if total_files > 0:
         save_dir = get_save_dir(files[0])
         if save_dir:
             agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            update_overall_progress(total_files, total_files, "集約データを保存中...")
+            set_file_progress_indeterminate("集約データをマッピング・保存中...")
             
             if out_format in ["xlsx", "csv"]:
                 final_aggregated_data = []
@@ -730,7 +733,7 @@ def convert_to_excel(files):
             with pdfplumber.open(pdf_path) as pdf:
                 total_pages = len(pdf.pages)
                 for page_idx, page in enumerate(pdf.pages, 1):
-                    update_file_progress(page_idx, total_pages, f"表データをExcelへ変換中... ( {page_idx} / {total_pages} ページ )")
+                    set_file_progress_determinate(page_idx, total_pages, f"表データをExcelへ変換中... ( {page_idx} / {total_pages} ページ )")
                     tables = page.extract_tables()
                     if not tables: continue
                     ws = wb.create_sheet(f"Page_{page_idx}")
@@ -759,7 +762,7 @@ def convert_to_image(files, ext):
         base = os.path.splitext(os.path.basename(f))[0]
         total_pages = len(doc)
         for n, page in enumerate(doc, 1):
-            update_file_progress(n, total_pages, f"画像へ変換中... ( {n} / {total_pages} ページ )")
+            set_file_progress_determinate(n, total_pages, f"画像へ変換中... ( {n} / {total_pages} ページ )")
             page.get_pixmap(dpi=200).save(os.path.join(save_dir, f"{base}_{n}.{ext}"))
 
 def convert_to_dxf(files):
@@ -775,7 +778,7 @@ def convert_to_dxf(files):
 
             total_pages = len(doc)
             for page_num, page in enumerate(doc, 1):
-                update_file_progress(page_num, total_pages, f"DXFへ変換中... ( {page_num} / {total_pages} ページ )")
+                set_file_progress_determinate(page_num, total_pages, f"DXFへ変換中... ( {page_num} / {total_pages} ページ )")
                 h = page.rect.height
                 paths = page.get_drawings()
                 is_vector_rich = len(paths) > 0
@@ -813,44 +816,54 @@ def convert_to_dxf(files):
                         if len(pts) > 1:
                             msp.add_lwpolyline(pts, close=True)
 
-            update_file_progress(total_pages, total_pages, "DXFファイルを保存中...")
+            set_file_progress_determinate(total_pages, total_pages, "DXFファイルを保存中...")
             dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
         except Exception as e:
             print(f"DXF Conversion Error: {e}")
 
 # ==============================
-# UI構築
+# UI構築 (モダン＆洗練化)
 # ==============================
 def update_ui():
     path_text = "\n".join(selected_files) if current_mode == "file" else (f"フォルダ: {selected_folder}" if selected_folder else "未選択")
     path_label.config(text=path_text)
     is_active = current_mode is not None
     
-    btns = [btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract]
-    for b in btns: b.config(state=NORMAL if is_active else DISABLED, bg="#1E88E5" if is_active else LIGHT, fg="white" if is_active else INACTIVE)
-    btn_merge.config(state=NORMAL if current_mode=="folder" else DISABLED, bg="#1E88E5" if current_mode=="folder" else LIGHT, fg="white" if current_mode=="folder" else INACTIVE)
+    state_val = tk.NORMAL if is_active else tk.DISABLED
+    for b in [btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract]:
+        b.config(state=state_val)
+    btn_merge.config(state=tk.NORMAL if current_mode=="folder" else tk.DISABLED)
 
 def toggle_api_key_entry(*args):
     if ai_engine_var.get() == "Gemini":
-        api_key_entry.config(state=NORMAL)
-        btn_api_test.config(state=NORMAL)
+        api_key_entry.config(state=tk.NORMAL)
+        btn_api_test.config(state=tk.NORMAL)
     else:
-        api_key_entry.config(state=DISABLED)
-        btn_api_test.config(state=DISABLED)
+        api_key_entry.config(state=tk.DISABLED)
+        btn_api_test.config(state=tk.DISABLED)
 
-root = Tk()
+root = tk.Tk()
 root.title(f"{APP_TITLE} {VERSION}")
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-root.configure(bg=LIGHT)
-root.resizable(False, False)
+root.configure(bg=BG_COLOR)
 
-# 変数の初期化
-rotate_option = IntVar(value=270)
-save_option = IntVar(value=1)
-ai_engine_var = StringVar(value="Gemini")
-api_key_var = StringVar(value=get_api_key() or "")
-output_format_var = StringVar(value="xlsx")
+style = ttk.Style()
+if "clam" in style.theme_names():
+    style.theme_use("clam")
+style.configure(".", background=BG_COLOR, font=("Segoe UI", 10))
+style.configure("Card.TFrame", background=CARD_BG)
+style.configure("Card.TLabelframe", background=CARD_BG, borderwidth=1, bordercolor=BORDER_COLOR)
+style.configure("Card.TLabelframe.Label", background=CARD_BG, foreground=PRIMARY, font=("Segoe UI", 11, "bold"))
 
+# ボタンデザインの洗練
+style.configure("TButton", padding=6, font=("Segoe UI", 10), background="#E9ECEF", foreground=TEXT_COLOR, borderwidth=1)
+style.map("TButton", background=[("active", "#DEE2E6")])
+style.configure("Primary.TButton", background=PRIMARY, foreground="white", borderwidth=0)
+style.map("Primary.TButton", background=[("active", PRIMARY_HOVER)])
+
+style.configure("TRadiobutton", background=CARD_BG, font=("Segoe UI", 10), foreground=TEXT_COLOR)
+
+# メニューバー
 menubar = Menu(root)
 help_menu = Menu(menubar, tearoff=0)
 help_menu.add_command(label="AI抽出の準備 (使い方)", command=show_ai_help)
@@ -862,77 +875,99 @@ help_menu.add_command(label="バージョン情報", command=show_version_info)
 menubar.add_cascade(label="ヘルプ", menu=help_menu)
 root.config(menu=menubar)
 
-title_frame = Frame(root, bg=LIGHT)
-title_frame.pack(pady=(10, 2))
-Label(title_frame, text=APP_TITLE, bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 16, "bold")).pack(side=LEFT)
-Label(title_frame, text=f" {VERSION}", bg=LIGHT, fg=INACTIVE, font=("Segoe UI", 11)).pack(side=LEFT, pady=(5, 0))
+# 変数の初期化
+rotate_option = tk.IntVar(value=270)
+save_option = tk.IntVar(value=1)
+ai_engine_var = tk.StringVar(value="Gemini")
+api_key_var = tk.StringVar(value=get_api_key() or "")
+output_format_var = tk.StringVar(value="xlsx")
 
-info_text = "✨ Update: AIがカラム(ヘッダー)を自動認識し、純粋なデータ行のみを集約出力します。"
-Label(root, text=info_text, bg=LIGHT, fg=INFO_TEXT, font=("Meiryo UI", 9)).pack(pady=(0, 2))
+# メインコンテナ (ゆとりのあるパディング)
+main_container = ttk.Frame(root, padding=25)
+main_container.pack(fill=tk.BOTH, expand=True)
 
-file_frame = Frame(root, bg=LIGHT)
-file_frame.pack(pady=5)
-Button(file_frame, text="📄 ファイル選択", command=select_files, width=22).grid(row=0, column=0, padx=5)
-Button(file_frame, text="📁 フォルダ選択", command=select_folder, width=22).grid(row=0, column=1, padx=5)
+# タイトルエリア
+title_frame = ttk.Frame(main_container)
+title_frame.pack(fill=tk.X, pady=(0, 15))
+ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
+ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
+ttk.Label(main_container, text="✨ Update: AIによる自己整合性分析（Chain of Thought）を導入し、集約時の列ズレを根本解消しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
-Label(root, text="選択パス", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold")).pack(pady=5)
-path_label = Label(root, text="未選択", bg=LIGHT, wraplength=520, justify="left")
-path_label.pack(pady=2)
+# ファイル選択カード
+file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
+file_card.pack(fill=tk.X, pady=5)
+btn_frame = ttk.Frame(file_card, style="Card.TFrame")
+btn_frame.pack()
+ttk.Button(btn_frame, text="📄 ファイルを選択", command=select_files, width=22, style="Primary.TButton").grid(row=0, column=0, padx=8)
+ttk.Button(btn_frame, text="📁 フォルダを選択", command=select_folder, width=22, style="Primary.TButton").grid(row=0, column=1, padx=8)
 
-save_frame = LabelFrame(root, text="保存先設定", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
-save_frame.pack(pady=5, fill="x", padx=10)
-Radiobutton(save_frame, text="同じフォルダ", variable=save_option, value=1, bg=LIGHT, command=on_save_mode_change).pack(anchor="w")
-Radiobutton(save_frame, text="任意フォルダ", variable=save_option, value=2, bg=LIGHT, command=on_save_mode_change).pack(anchor="w")
-Button(save_frame, text="📂 保存先を選択", command=select_save_dir, width=22).pack(pady=3)
-save_label = Label(save_frame, text="同じフォルダ", bg=LIGHT)
+path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=TEXT_COLOR, wraplength=580, justify="center")
+path_label.pack(pady=(12, 0))
+
+# 設定グリッド (保存先 & 回転)
+settings_grid = ttk.Frame(main_container)
+settings_grid.pack(fill=tk.X, pady=15)
+settings_grid.columnconfigure(0, weight=1)
+settings_grid.columnconfigure(1, weight=1)
+
+save_frame = ttk.LabelFrame(settings_grid, text=" 保存先設定 ", style="Card.TLabelframe", padding=12)
+save_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+ttk.Radiobutton(save_frame, text="元のPDFと同じフォルダ", variable=save_option, value=1, command=on_save_mode_change).pack(anchor="w", pady=4)
+ttk.Radiobutton(save_frame, text="任意のフォルダを指定", variable=save_option, value=2, command=on_save_mode_change).pack(anchor="w", pady=4)
+ttk.Button(save_frame, text="📂 フォルダ参照", command=select_save_dir).pack(pady=(10, 5))
+save_label = ttk.Label(save_frame, text="同じフォルダ", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 9))
 save_label.pack()
 
-rotate_frame = LabelFrame(root, text="回転設定", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
-rotate_frame.pack(pady=5, fill="x", padx=10)
+rotate_frame = ttk.LabelFrame(settings_grid, text=" 回転設定 ", style="Card.TLabelframe", padding=12)
+rotate_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 for t, v in [("左（270°）", 270), ("上下（180°）", 180), ("右（90°）", 90)]:
-    Radiobutton(rotate_frame, text=t, variable=rotate_option, value=v, bg=LIGHT).pack(anchor="w")
+    ttk.Radiobutton(rotate_frame, text=t, variable=rotate_option, value=v).pack(anchor="w", pady=5)
 
-ai_frame = LabelFrame(root, text="AI抽出設定", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
-ai_frame.pack(pady=5, fill="x", padx=10)
+# AI設定カード
+ai_frame = ttk.LabelFrame(main_container, text=" AI抽出設定 ", style="Card.TLabelframe", padding=12)
+ai_frame.pack(fill=tk.X, pady=10)
 
-engine_frame = Frame(ai_frame, bg=LIGHT)
-engine_frame.pack(anchor="w", fill="x", pady=2)
-Label(engine_frame, text="エンジン:", bg=LIGHT, width=10, anchor="e").pack(side=LEFT, padx=5)
-Radiobutton(engine_frame, text="Gemini API (推奨)", variable=ai_engine_var, value="Gemini", bg=LIGHT).pack(side=LEFT)
-Radiobutton(engine_frame, text="Tesseract", variable=ai_engine_var, value="Tesseract", bg=LIGHT).pack(side=LEFT)
+engine_frame = ttk.Frame(ai_frame, style="Card.TFrame")
+engine_frame.pack(fill=tk.X, pady=5)
+ttk.Label(engine_frame, text="エンジン:", width=10, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+ttk.Radiobutton(engine_frame, text="Gemini API (推奨)", variable=ai_engine_var, value="Gemini").pack(side=tk.LEFT, padx=5)
+ttk.Radiobutton(engine_frame, text="Tesseract", variable=ai_engine_var, value="Tesseract").pack(side=tk.LEFT, padx=5)
 
-api_key_frame = Frame(ai_frame, bg=LIGHT)
-api_key_frame.pack(anchor="w", fill="x", pady=2)
-Label(api_key_frame, text="APIキー:", bg=LIGHT, width=10, anchor="e").pack(side=LEFT, padx=5)
-api_key_entry = Entry(api_key_frame, textvariable=api_key_var, width=42, show="*")
-api_key_entry.pack(side=LEFT)
-btn_api_test = Button(api_key_frame, text="テスト", command=test_api_key_ui, width=6, bg="#E0E0E0")
-btn_api_test.pack(side=LEFT, padx=5)
+api_key_frame = ttk.Frame(ai_frame, style="Card.TFrame")
+api_key_frame.pack(fill=tk.X, pady=5)
+ttk.Label(api_key_frame, text="APIキー:", width=10, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+api_key_entry = ttk.Entry(api_key_frame, textvariable=api_key_var, width=50, show="*")
+api_key_entry.pack(side=tk.LEFT, padx=(0, 8))
+btn_api_test = ttk.Button(api_key_frame, text="テスト", command=test_api_key_ui, width=8)
+btn_api_test.pack(side=tk.LEFT)
 
-format_frame = Frame(ai_frame, bg=LIGHT)
-format_frame.pack(anchor="w", fill="x", pady=2)
-Label(format_frame, text="出力形式:", bg=LIGHT, width=10, anchor="e").pack(side=LEFT, padx=5)
-Radiobutton(format_frame, text=".xlsx", variable=output_format_var, value="xlsx", bg=LIGHT).pack(side=LEFT)
-Radiobutton(format_frame, text=".csv", variable=output_format_var, value="csv", bg=LIGHT).pack(side=LEFT)
-Radiobutton(format_frame, text=".txt", variable=output_format_var, value="txt", bg=LIGHT).pack(side=LEFT)
+format_frame = ttk.Frame(ai_frame, style="Card.TFrame")
+format_frame.pack(fill=tk.X, pady=5)
+ttk.Label(format_frame, text="出力形式:", width=10, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+for fmt in ["xlsx", "csv", "txt"]:
+    ttk.Radiobutton(format_frame, text=f".{fmt}", variable=output_format_var, value=fmt).pack(side=tk.LEFT, padx=5)
 
 ai_engine_var.trace("w", toggle_api_key_entry)
 
-op_frame = LabelFrame(root, text="操作", bg=LIGHT, fg=PRIMARY, font=("Segoe UI", 10, "bold"), padx=5, pady=5)
-op_frame.pack(pady=10)
-btn_merge = Button(op_frame, text="結合", width=12, command=lambda: safe_run(merge_pdfs))
-btn_split = Button(op_frame, text="分割", width=12, command=lambda: safe_run(split_pdfs))
-btn_rotate = Button(op_frame, text="回転", width=12, command=lambda: safe_run(rotate_pdfs))
-btn_text = Button(op_frame, text="Text抽出", width=12, command=lambda: safe_run(extract_text))
-btn_excel = Button(op_frame, text="Excel変換", width=12, command=lambda: safe_run(convert_to_excel))
-btn_jpeg = Button(op_frame, text="JPEG変換", width=12, command=lambda: safe_run(lambda fs: convert_to_image(fs, "jpg")))
-btn_png = Button(op_frame, text="PNG変換", width=12, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")))
-btn_dxf = Button(op_frame, text="DXF変換", width=12, command=lambda: safe_run(convert_to_dxf))
-btn_ai_extract = Button(op_frame, text="AI抽出", width=12, command=run_ai_extraction)
+# 操作ボタン群カード
+op_frame = ttk.LabelFrame(main_container, text=" 実行アクション ", style="Card.TLabelframe", padding=15)
+op_frame.pack(fill=tk.X, pady=10)
+op_inner = ttk.Frame(op_frame, style="Card.TFrame")
+op_inner.pack()
+
+btn_merge = ttk.Button(op_inner, text="結合", width=14, command=lambda: safe_run(merge_pdfs))
+btn_split = ttk.Button(op_inner, text="分割", width=14, command=lambda: safe_run(split_pdfs))
+btn_rotate = ttk.Button(op_inner, text="回転", width=14, command=lambda: safe_run(rotate_pdfs))
+btn_text = ttk.Button(op_inner, text="Text抽出", width=14, command=lambda: safe_run(extract_text))
+btn_excel = ttk.Button(op_inner, text="Excel変換", width=14, command=lambda: safe_run(convert_to_excel))
+btn_jpeg = ttk.Button(op_inner, text="JPEG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "jpg")))
+btn_png = ttk.Button(op_inner, text="PNG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")))
+btn_dxf = ttk.Button(op_inner, text="DXF変換", width=14, command=lambda: safe_run(convert_to_dxf))
+btn_ai_extract = ttk.Button(op_inner, text="AIデータ抽出", width=14, command=run_ai_extraction, style="Primary.TButton")
 
 op_list = [btn_merge, btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract]
 for i, b in enumerate(op_list):
-    b.grid(row=i//4, column=i%4, padx=5, pady=3)
+    b.grid(row=i//4, column=i%4, padx=10, pady=10)
 
 update_ui()
 toggle_api_key_entry()
