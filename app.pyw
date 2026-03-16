@@ -3,9 +3,9 @@
 PdfEditMiya v1.10.0
 ------------------
 更新情報:
-- v1.10.0 (Update 8): 
-  【バグ修正】長さ1のリスト内にタプル文字列が格納されている場合でも、強制的に複数列へ展開・分割する強力なパース機能を実装し、1列合体エラーを完全解決。
-  【改善】列の自動マッピングにおいてテキスト判定を完全撤廃。各列の「数値・分数の割合」と「桁数」の整合性のみで列を判別し、テキストは元の順序を維持する堅牢なロジックに刷新。
+- v1.10.0 (Update 11): 
+  【改善】集約データ作成時の出力ファイル名を、親フォルダ名等に依存させず、常に「データ集約」となるように固定化。
+  【維持】不要な空白行の削除、タプル展開バグ修正、数値プロファイリングによる自動列マッピング機能はすべて保持。
 """
 
 import os
@@ -69,11 +69,11 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
 [ v1.10.0 ]
+- 【ファイル名の固定化】集約データ出力時のファイル名を常に「データ集約.xlsx（または.csv/.txt）」となるように改善しました。
+- 【空行の自動削除】集約データにおいて、ファイル名以外のデータが存在しない不要な空白行を自動的に削除して出力する機能を実装しました。
 - 【列ズレの根本的解決】1つのセル内にタプル文字列としてデータが合体してしまうバグを修正。astモジュールで強制的に複数列へ展開します。
 - 【スマートカラムマッピング】テキスト（カラム名）での判定を廃止し、「数値・分数の割合と桁数の整合性」のみに基づいて列を自動判別・整列させる仕様に変更。テキスト列は元の順番を維持します。
-- 【列幅の自動調整】作成されたExcelデータの列幅が、セル内の文字数や桁数に合わせて自動的に広がるようになりました。
-- 【データ分離の最優先化】AIがカラムに合わせてデータを結合してしまうのを防ぐため、「罫線や空白による物理的な分割」を絶対ルール化。
-- 【新機能】「データ集約のみ」ボタンを追加。
+- 【機能分離】AIデータ抽出時は個別ファイルのみ作成し、集約データは専用の「データ集約」ボタンからのみ作成するようアーキテクチャを改善。
 """
 
 AI_HELP_TEXT = """
@@ -447,7 +447,6 @@ def extract_text(files):
 # プロファイリング・スマートマッピング機能 (数値整合性特化)
 # ==============================
 def analyze_column_profile(col_data):
-    """カラム内のデータを分析し、純粋な数値と分数の割合、平均桁数を抽出する"""
     if not col_data: 
         return {"pure_num_ratio": 0.0, "fraction_ratio": 0.0, "avg_num_len": 0.0, "is_text": True}
     
@@ -462,13 +461,11 @@ def analyze_column_profile(col_data):
         if not s or s == "None": continue
         total_cells += 1
         
-        # 分数（例: 1/12）の判定
         if re.match(r'^\d+/\d+$', s):
             fraction_cnt += 1
             num_cell_cnt += 1
             total_num_len += len(s)
         else:
-            # 純粋な数字の判定
             s_clean = s.replace(",", "").replace(".", "", 1).replace("-", "", 1)
             if s_clean.isdigit():
                 pure_num_cnt += 1
@@ -480,7 +477,6 @@ def analyze_column_profile(col_data):
         
     pure_num_ratio = pure_num_cnt / total_cells
     fraction_ratio = fraction_cnt / total_cells
-    # 数値の特徴がほとんどない場合は「テキスト列」とみなす
     is_text = (pure_num_ratio < 0.2 and fraction_ratio < 0.2)
     
     return {
@@ -491,7 +487,6 @@ def analyze_column_profile(col_data):
     }
 
 def get_profile_similarity(p1, p2):
-    """数値の割合と桁数の差で類似度を計算する"""
     diff_pure = abs(p1["pure_num_ratio"] - p2["pure_num_ratio"])
     diff_frac = abs(p1["fraction_ratio"] - p2["fraction_ratio"])
     
@@ -502,25 +497,17 @@ def get_profile_similarity(p1, p2):
     return max(0.0, sim)
 
 def parse_row_data(row_data):
-    """
-    【1列合体エラーの根本解決】
-    AIがリストやタプルを誤って文字列化して出力した場合や、Excel/CSVから
-    長さ1のリストとして "(None, '図番', ...)" が渡ってきた場合に安全に展開・分割する。
-    """
-    # Excel/CSVから要素数1のリストとして読み込まれたタプル文字列を展開
     if isinstance(row_data, list) and len(row_data) == 1:
         row_data = row_data[0]
 
     if isinstance(row_data, str):
         row_data = row_data.strip()
-        # 文字列が () や [] で囲まれている場合は構文解析でリスト化
         if (row_data.startswith('(') and row_data.endswith(')')) or (row_data.startswith('[') and row_data.endswith(']')):
             try:
                 parsed = ast.literal_eval(row_data)
                 if isinstance(parsed, (list, tuple)):
                     return [str(x) if x is not None else "" for x in parsed]
             except:
-                # astでエラーになってもカンマで強引に分割
                 return [x.strip().strip("'\"") for x in row_data.strip("()[]").split(",")]
         return [row_data]
         
@@ -533,7 +520,7 @@ def parse_row_data(row_data):
     return [str(x) if x is not None else "" for x in row_data]
 
 # ==============================
-# 新設: データ集約のみタスク
+# データ集約 タスク (完全分離)
 # ==============================
 def aggregate_only_task(files):
     out_format = output_format_var.get()
@@ -551,7 +538,7 @@ def aggregate_only_task(files):
             target_files.append(f)
             
     if not target_files:
-        raise Exception(f"指定された出力形式 (.{out_format}) のデータが見つかりません。")
+        raise Exception(f"指定された出力形式 (.{out_format}) のデータが見つかりません。\n事前に抽出処理を行ってください。")
 
     total_files = len(target_files)
     aggregated_master_header = ["元ファイル名"]
@@ -560,7 +547,6 @@ def aggregate_only_task(files):
     aggregated_all_texts = []
     
     def map_to_master(fname, curr_header, curr_rows):
-        # ヘッダーをリストに確実化
         if isinstance(curr_header, list) and len(curr_header) == 1:
             curr_header = parse_row_data(curr_header)
         
@@ -574,7 +560,6 @@ def aggregate_only_task(files):
         col_data_list = [[] for _ in range(col_count)]
         parsed_rows = []
         
-        # データを確実にパースし、列ごとにプロファイルを収集
         for r in curr_rows:
             r_list = parse_row_data(r)
             parsed_rows.append(r_list)
@@ -598,14 +583,12 @@ def aggregate_only_task(files):
                     p_curr = curr_profiles[i]
                     p_master = master_profiles[m_idx]
                     
-                    # 【改善】テキストの列同士は、元の順番（インデックス）を最優先
                     if p_curr["is_text"] and p_master["is_text"]:
                         if i == (m_idx - 1):
                             total_score = 1.0
                         else:
                             total_score = 0.5 - abs(i - (m_idx - 1)) * 0.1
                     else:
-                        # 数値・分数の列は、プロファイル（整合性・桁数）を優先
                         p_score = get_profile_similarity(p_curr, p_master)
                         total_score = p_score - abs(i - (m_idx - 1)) * 0.05
                     
@@ -617,7 +600,6 @@ def aggregate_only_task(files):
                 col_mapping[i] = best_match_idx
                 mapped_master_indices.add(best_match_idx)
                 
-                # プロファイルを平均化して更新
                 if best_match_idx in master_profiles:
                     old_p = master_profiles[best_match_idx]
                     new_p = curr_profiles[i]
@@ -645,7 +627,10 @@ def aggregate_only_task(files):
                     val_str = str(val).strip() if val is not None else ""
                     if val_str == "None": val_str = ""
                     aligned_row[m_idx] = val_str
-            aggregated_master_rows.append(aligned_row)
+            
+            # 元ファイル名以外のセルがすべて空文字なら、集約データに追加しない
+            if any(v != "" for v in aligned_row[1:]):
+                aggregated_master_rows.append(aligned_row)
 
     for i, f in enumerate(target_files, 1):
         update_overall_progress(i, total_files, f"データを集約中... ( {i} / {total_files} ファイル )")
@@ -689,7 +674,6 @@ def aggregate_only_task(files):
     if total_files > 0:
         save_dir = get_save_dir(target_files[0])
         if save_dir:
-            agg_base = os.path.basename(selected_folder) if selected_folder else "Manual_Aggregated"
             set_file_progress_indeterminate("集約データを保存中...")
             
             if out_format in ["xlsx", "csv"]:
@@ -698,7 +682,7 @@ def aggregate_only_task(files):
                     padded_row = (row_data + [""] * len(aggregated_master_header))[:len(aggregated_master_header)]
                     final_aggregated_data.append(padded_row)
 
-                if out_format == "xlsx" and final_aggregated_data:
+                if out_format == "xlsx" and len(final_aggregated_data) > 1:
                     wb_agg = Workbook()
                     ws_agg = wb_agg.active
                     ws_agg.title = "集約データ"
@@ -706,19 +690,22 @@ def aggregate_only_task(files):
                         for c_idx, val in enumerate(row_data, 1):
                             ws_agg.cell(row=r_idx, column=c_idx, value=str(val).strip())
                     auto_adjust_excel_column_width(ws_agg)
-                    wb_agg.save(os.path.join(save_dir, f"{agg_base}_データ集約のみ.xlsx"))
+                    # 【変更】出力ファイル名を「データ集約.xlsx」に固定
+                    wb_agg.save(os.path.join(save_dir, "データ集約.xlsx"))
                     
-                elif out_format == "csv" and final_aggregated_data:
-                    with open(os.path.join(save_dir, f"{agg_base}_データ集約のみ.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
+                elif out_format == "csv" and len(final_aggregated_data) > 1:
+                    # 【変更】出力ファイル名を「データ集約.csv」に固定
+                    with open(os.path.join(save_dir, "データ集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
                         writer = csv.writer(f_out)
                         writer.writerows(final_aggregated_data)
                         
             elif out_format == "txt" and aggregated_all_texts:
-                with open(os.path.join(save_dir, f"{agg_base}_データ集約のみ.txt"), "w", encoding="utf-8") as f_out:
+                # 【変更】出力ファイル名を「データ集約.txt」に固定
+                with open(os.path.join(save_dir, "データ集約.txt"), "w", encoding="utf-8") as f_out:
                     f_out.write("\n\n".join(aggregated_all_texts))
 
 # ==============================
-# AI抽出ロジック
+# AI抽出ロジック (抽出機能のみ)
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -738,8 +725,6 @@ def extract_tesseract_task(files):
     if not files: raise Exception("PDFファイルが含まれていません。")
     out_format = output_format_var.get()
     total_files = len(files)
-    aggregated_all_rows = []
-    aggregated_all_texts = []
     
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -747,7 +732,6 @@ def extract_tesseract_task(files):
             save_dir = get_save_dir(f)
             if not save_dir: return
             base = os.path.splitext(os.path.basename(f))[0]
-            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             digits = max(2, len(str(total_pages)))
@@ -770,11 +754,9 @@ def extract_tesseract_task(files):
                         ws = wb.create_sheet(f"Page_{page_str}")
                         for row_idx, line in enumerate(text.split('\n'), 1):
                             ws.cell(row=row_idx, column=1, value=line.strip())
-                            aggregated_all_rows.append([filename, line.strip()])
                         auto_adjust_excel_column_width(ws)
                     else:
                         all_text_list.append(text)
-                        aggregated_all_texts.append(f"[{filename}] {text}")
                 except Exception as e:
                     err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
                     if out_format == "xlsx":
@@ -801,29 +783,6 @@ def extract_tesseract_task(files):
         except Exception as e:
             print(f"Tesseract Error: {e}")
             raise e
-
-    if total_files > 0:
-        save_dir = get_save_dir(files[0])
-        if save_dir:
-            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            set_file_progress_indeterminate("集約データを保存中...")
-            
-            if out_format == "xlsx" and aggregated_all_rows:
-                wb_agg = Workbook()
-                ws_agg = wb_agg.active
-                ws_agg.title = "集約データ"
-                ws_agg.cell(row=1, column=1, value="元ファイル名")
-                ws_agg.cell(row=1, column=2, value="抽出テキスト")
-                for r_idx, row_data in enumerate(aggregated_all_rows, 2):
-                    ws_agg.cell(row=r_idx, column=1, value=row_data[0])
-                    ws_agg.cell(row=r_idx, column=2, value=row_data[1])
-                auto_adjust_excel_column_width(ws_agg)
-                wb_agg.save(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.xlsx"))
-                
-            elif out_format in ["csv", "txt"] and aggregated_all_texts:
-                ext = "csv" if out_format == "csv" else "txt"
-                with open(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.{ext}"), "w", encoding="utf-8-sig" if ext=="csv" else "utf-8", newline="") as f_out:
-                    f_out.write("\n\n".join(aggregated_all_texts))
 
 def extract_gemini_task(files):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -860,97 +819,6 @@ def extract_gemini_task(files):
 
     total_files = len(files)
     
-    aggregated_master_header = ["元ファイル名"]
-    aggregated_master_rows = []
-    master_profiles = {}
-    aggregated_all_texts = []
-    
-    def map_to_master(fname, curr_header, curr_rows):
-        if isinstance(curr_header, list) and len(curr_header) == 1:
-            curr_header = parse_row_data(curr_header)
-            
-        safe_header = []
-        for i, h in enumerate(curr_header):
-            h_str = str(h).strip() if h is not None else ""
-            if not h_str: h_str = f"列{i+1}"
-            safe_header.append(h_str)
-            
-        col_count = len(safe_header)
-        col_data_list = [[] for _ in range(col_count)]
-        parsed_rows = []
-        
-        for r in curr_rows:
-            r_list = parse_row_data(r)
-            parsed_rows.append(r_list)
-            for i, val in enumerate(r_list):
-                if i < col_count: col_data_list[i].append(val)
-                
-        curr_profiles = [analyze_column_profile(col_data_list[i]) for i in range(col_count)]
-            
-        col_mapping = {}
-        mapped_master_indices = set()
-        
-        for i, h in enumerate(safe_header):
-            best_match_idx = -1
-            best_score = -1
-            
-            for m_idx, m_h in enumerate(aggregated_master_header):
-                if m_idx == 0: continue
-                if m_idx in mapped_master_indices: continue
-                
-                if m_idx in master_profiles:
-                    p_curr = curr_profiles[i]
-                    p_master = master_profiles[m_idx]
-                    
-                    if p_curr["is_text"] and p_master["is_text"]:
-                        # テキスト同士はインデックス順を絶対視
-                        if i == (m_idx - 1):
-                            total_score = 1.0
-                        else:
-                            total_score = 0.5 - abs(i - (m_idx - 1)) * 0.1
-                    else:
-                        # 数値・分数の列は、プロファイル（整合性・桁数）を優先
-                        p_score = get_profile_similarity(p_curr, p_master)
-                        total_score = p_score - abs(i - (m_idx - 1)) * 0.05
-                    
-                    if total_score > best_score and total_score > 0.4:
-                        best_score = total_score
-                        best_match_idx = m_idx
-            
-            if best_match_idx != -1:
-                col_mapping[i] = best_match_idx
-                mapped_master_indices.add(best_match_idx)
-                
-                # プロファイル更新
-                if best_match_idx in master_profiles:
-                    old_p = master_profiles[best_match_idx]
-                    new_p = curr_profiles[i]
-                    master_profiles[best_match_idx] = {
-                        "pure_num_ratio": (old_p["pure_num_ratio"] + new_p["pure_num_ratio"]) / 2,
-                        "fraction_ratio": (old_p["fraction_ratio"] + new_p["fraction_ratio"]) / 2,
-                        "avg_num_len": (old_p["avg_num_len"] + new_p["avg_num_len"]) / 2,
-                        "is_text": old_p["is_text"] and new_p["is_text"]
-                    }
-            else:
-                aggregated_master_header.append(h)
-                new_idx = len(aggregated_master_header) - 1
-                col_mapping[i] = new_idx
-                mapped_master_indices.add(new_idx)
-                master_profiles[new_idx] = curr_profiles[i]
-                    
-        for r in parsed_rows:
-            aligned_row = [""] * len(aggregated_master_header)
-            aligned_row[0] = fname
-            for i, val in enumerate(r):
-                if i in col_mapping:
-                    m_idx = col_mapping[i]
-                    if m_idx >= len(aligned_row):
-                        aligned_row.extend([""] * (m_idx - len(aligned_row) + 1))
-                    val_str = str(val).strip() if val is not None else ""
-                    if val_str == "None": val_str = ""
-                    aligned_row[m_idx] = val_str
-            aggregated_master_rows.append(aligned_row)
-
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
         try:
@@ -958,7 +826,6 @@ def extract_gemini_task(files):
             if not save_dir: return
             
             base = os.path.splitext(os.path.basename(f))[0]
-            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             digits = max(2, len(str(total_pages)))
@@ -979,11 +846,13 @@ def extract_gemini_task(files):
                 elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                denoised = cv2.medianBlur(gray, 3) 
+                blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+                binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5)
+                clean_bg = np.where(binary == 255, 255, gray)
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                enhanced = clahe.apply(denoised)
-                blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
-                sharp = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+                enhanced = clahe.apply(clean_bg.astype(np.uint8))
+                blur_for_sharp = cv2.GaussianBlur(enhanced, (0, 0), 2)
+                sharp = cv2.addWeighted(enhanced, 1.5, blur_for_sharp, -0.5, 0)
                 img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
                 
                 max_retries = 3
@@ -1038,15 +907,12 @@ def extract_gemini_task(files):
                             padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
                             page_data_to_write.append(padded_header)
                             
-                            parsed_rows = []
                             for row_data in rows:
                                 parsed_r = parse_row_data(row_data)
                                 safe_row_local = (parsed_r + [""] * page_col_count)[:page_col_count]
-                                page_data_to_write.append(safe_row_local)
-                                parsed_rows.append(safe_row_local)
-
-                            # 数値プロファイリングを利用したスマートマッピング
-                            map_to_master(filename, padded_header, parsed_rows)
+                                # 不要な空白行はスキップ
+                                if any(v != "" for v in safe_row_local):
+                                    page_data_to_write.append(safe_row_local)
 
                             if out_format == "xlsx":
                                 for row_idx, r_data in enumerate(page_data_to_write, 1):
@@ -1070,7 +936,6 @@ def extract_gemini_task(files):
                                 all_text_list.append(err_msg)
                     else: # txt
                         all_text_list.append(extracted_text)
-                        aggregated_all_texts.append(f"[{filename}] {extracted_text}")
                 else:
                     err_msg = f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\nエラー詳細: {last_error}"
                     if out_format == "xlsx":
@@ -1095,40 +960,6 @@ def extract_gemini_task(files):
         except Exception as e:
             print(f"AI Task Error: {e}")
             raise e
-
-    if total_files > 0:
-        save_dir = get_save_dir(files[0])
-        if save_dir:
-            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            set_file_progress_indeterminate("集約データを自動補正・保存中...")
-            
-            if out_format in ["xlsx", "csv"]:
-                final_aggregated_data = [aggregated_master_header]
-                for row_data in aggregated_master_rows:
-                    padded_row = (row_data + [""] * len(aggregated_master_header))[:len(aggregated_master_header)]
-                    final_aggregated_data.append(padded_row)
-
-                if out_format == "xlsx" and final_aggregated_data:
-                    wb_agg = Workbook()
-                    ws_agg = wb_agg.active
-                    ws_agg.title = "集約データ"
-                    for r_idx, row_data in enumerate(final_aggregated_data, 1):
-                        for c_idx, val in enumerate(row_data, 1):
-                            val_str = str(val).strip() if val != "None" else ""
-                            ws_agg.cell(row=r_idx, column=c_idx, value=val_str)
-                    auto_adjust_excel_column_width(ws_agg)
-                    wb_agg.save(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.xlsx"))
-                    
-                elif out_format == "csv" and final_aggregated_data:
-                    with open(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
-                        writer = csv.writer(f_out)
-                        for r_data in final_aggregated_data:
-                            clean_row = [v if v != "None" else "" for v in r_data]
-                            writer.writerow(clean_row)
-                        
-            elif out_format == "txt" and aggregated_all_texts:
-                with open(os.path.join(save_dir, f"{agg_base}_AI抽出_集約.txt"), "w", encoding="utf-8") as f_out:
-                    f_out.write("\n\n".join(aggregated_all_texts))
 
 def convert_to_excel(files):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -1278,6 +1109,29 @@ style.map("TButton", background=[("active", "#DEE2E6")])
 style.configure("Primary.TButton", background=PRIMARY, foreground="white", borderwidth=0)
 style.map("Primary.TButton", background=[("active", PRIMARY_HOVER)])
 
+# 機能ごとのカラー設定
+COLOR_SUCCESS = "#198754"
+COLOR_SUCCESS_HOVER = "#157347"
+COLOR_INFO = "#0DCAF0"
+COLOR_INFO_HOVER = "#0BACCE"
+COLOR_WARNING = "#FFC107"
+COLOR_WARNING_HOVER = "#E0A800"
+COLOR_DANGER = "#DC3545"
+COLOR_DANGER_HOVER = "#B02A37"
+COLOR_PURPLE = "#6F42C1"
+COLOR_PURPLE_HOVER = "#59339D"
+
+style.configure("Success.TButton", background=COLOR_SUCCESS, foreground="white", borderwidth=0)
+style.map("Success.TButton", background=[("active", COLOR_SUCCESS_HOVER)])
+style.configure("Info.TButton", background=COLOR_INFO, foreground="white", borderwidth=0)
+style.map("Info.TButton", background=[("active", COLOR_INFO_HOVER)])
+style.configure("Warning.TButton", background=COLOR_WARNING, foreground="black", borderwidth=0)
+style.map("Warning.TButton", background=[("active", COLOR_WARNING_HOVER)])
+style.configure("Danger.TButton", background=COLOR_DANGER, foreground="white", borderwidth=0)
+style.map("Danger.TButton", background=[("active", COLOR_DANGER_HOVER)])
+style.configure("Purple.TButton", background=COLOR_PURPLE, foreground="white", borderwidth=0)
+style.map("Purple.TButton", background=[("active", COLOR_PURPLE_HOVER)])
+
 style.configure("TRadiobutton", background=CARD_BG, font=("Segoe UI", 10), foreground=TEXT_COLOR)
 
 # メニューバー
@@ -1299,7 +1153,7 @@ ai_engine_var = tk.StringVar(value="Gemini")
 api_key_var = tk.StringVar(value=get_api_key() or "")
 output_format_var = tk.StringVar(value="xlsx")
 
-# メインコンテナ (ゆとりのあるパディング)
+# メインコンテナ
 main_container = ttk.Frame(root, padding=25)
 main_container.pack(fill=tk.BOTH, expand=True)
 
@@ -1308,7 +1162,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: AI配列の文字化け（タプル）バグを修正し、数値の整合性のみで列を判別・整列します。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: 集約時のファイル名固定化と、不要な空白行の完全削除機能を搭載しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
@@ -1372,18 +1226,18 @@ op_frame.pack(fill=tk.X, pady=10)
 op_inner = ttk.Frame(op_frame, style="Card.TFrame")
 op_inner.pack()
 
-btn_merge = ttk.Button(op_inner, text="結合", width=14, command=lambda: safe_run(merge_pdfs))
-btn_split = ttk.Button(op_inner, text="分割", width=14, command=lambda: safe_run(split_pdfs))
-btn_rotate = ttk.Button(op_inner, text="回転", width=14, command=lambda: safe_run(rotate_pdfs))
-btn_text = ttk.Button(op_inner, text="Text抽出", width=14, command=lambda: safe_run(extract_text))
+btn_merge = ttk.Button(op_inner, text="結合", width=14, command=lambda: safe_run(merge_pdfs), style="Primary.TButton")
+btn_split = ttk.Button(op_inner, text="分割", width=14, command=lambda: safe_run(split_pdfs), style="Primary.TButton")
+btn_rotate = ttk.Button(op_inner, text="回転", width=14, command=lambda: safe_run(rotate_pdfs), style="Primary.TButton")
+btn_text = ttk.Button(op_inner, text="Text抽出", width=14, command=lambda: safe_run(extract_text), style="Success.TButton")
 
-btn_excel = ttk.Button(op_inner, text="Excel変換", width=14, command=lambda: safe_run(convert_to_excel))
-btn_jpeg = ttk.Button(op_inner, text="JPEG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "jpg")))
-btn_png = ttk.Button(op_inner, text="PNG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")))
-btn_dxf = ttk.Button(op_inner, text="DXF変換", width=14, command=lambda: safe_run(convert_to_dxf))
+btn_excel = ttk.Button(op_inner, text="Excel変換", width=14, command=lambda: safe_run(convert_to_excel), style="Success.TButton")
+btn_jpeg = ttk.Button(op_inner, text="JPEG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "jpg")), style="Info.TButton")
+btn_png = ttk.Button(op_inner, text="PNG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")), style="Info.TButton")
+btn_dxf = ttk.Button(op_inner, text="DXF変換", width=14, command=lambda: safe_run(convert_to_dxf), style="Warning.TButton")
 
-btn_ai_extract = ttk.Button(op_inner, text="AIデータ抽出", width=14, command=run_ai_extraction, style="Primary.TButton")
-btn_aggregate = ttk.Button(op_inner, text="データ集約のみ", width=14, command=lambda: safe_run(aggregate_only_task), style="Primary.TButton")
+btn_ai_extract = ttk.Button(op_inner, text="AIデータ抽出", width=14, command=run_ai_extraction, style="Danger.TButton")
+btn_aggregate = ttk.Button(op_inner, text="データ集約", width=14, command=lambda: safe_run(aggregate_only_task), style="Purple.TButton")
 
 op_list = [btn_merge, btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract, btn_aggregate]
 for i, b in enumerate(op_list):
