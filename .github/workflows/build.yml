@@ -1,55 +1,47 @@
 name: Build EXE
 
-# 実行のタイミング：mainブランチに変更がプッシュされた時
 on:
   push:
     branches: [ "main" ]
 
 jobs:
   build:
-    # Windows環境でビルドを実行
     runs-on: windows-latest
 
     steps:
-    # 1. リポジトリのコードを取得
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. Python環境のセットアップ（★安定版の3.11に変更）
+    # Python環境のセットアップ（安定した3.11を使用）
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    # 3. 必要なライブラリのインストール
+    # 必要なライブラリのインストール
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # requirements.txt から ezdxf と PyQt6 をインストール
         pip install -r requirements.txt
+        # exe化ツールのインストール
         pip install pyinstaller
 
-    # 4. PyInstallerでexe化の実行（★取りこぼし防止コマンドを追加）
+    # PyInstallerでexe化の実行
     - name: Build with PyInstaller
       run: >
         pyinstaller 
         --onefile 
         --noconsole 
-        --name "PdfEditMiya" 
+        --clean 
+        --name "PdfEditMiya-v1.10.0" 
         --add-data "README.md;."
-        --collect-all "google.generativeai" 
-        --collect-all "google.ai.generativelanguage"
-        --collect-all "grpc"
-        --hidden-import "pdfplumber" 
-        --hidden-import "fitz" 
-        --hidden-import "ezdxf" 
-        --hidden-import "cv2" 
-        --hidden-import "pytesseract"
-        --hidden-import "PIL"
+        --collect-all PyQt6
         app.pyw
 
-    # 5. 生成されたexeファイルを成果物(Artifact)としてアップロード
+    # 完成したexeファイルをGitHub上にアップロード
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: PdfEditMiya-exe
-        path: dist/PdfEditMiya.exe
+        name: PdfEditMiya-v1.10.0
+        path: dist/PdfEditMiya-v1.10.0.exe

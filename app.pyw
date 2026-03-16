@@ -3,8 +3,7 @@
 PdfEditMiya v1.10.0
 ------------------
 更新情報:
-- v1.10.0 (Update 9): 
-  【改善】集約データの空白セル自動引継ぎにおいて、ファイルが切り替わった場合でも引継ぎをリセットせず、前のファイルのテキストをシームレスに引き継ぐようにロジックを改修。
+- v1.10.0: ウィンドウの初期表示位置を画面左上に固定。その他、集約ロジックやAI抽出機能は最新状態を保持。
 """
 
 import os
@@ -68,11 +67,12 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
 [ v1.10.0 ]
-- 【ファイル境界越えの引継ぎ】集約データのテキスト自動補完において、別のファイルに移った際にも直前のテキストを引き継ぐように改善しました。
-- 【列ズレの根本的解決】1つのセル内にタプル文字列としてデータが合体してしまうバグを修正。astモジュールで強制的に複数列へ展開します。
-- 【スマートカラムマッピング】テキスト（カラム名）での判定を廃止し、「数値・分数の割合と桁数の整合性」のみに基づいて列を自動判別・整列させる仕様に変更。テキスト列は元の順番を維持します。
+- 【レイアウト固定】アプリ起動時のウィンドウ表示位置を画面左上に固定しました。
+- 【引継ぎ処理の強化】「〃」などの繰り返し記号がある場合も、上の行のテキストを引き継ぐように改善。
+- 【引継ぎの例外設定】「備考」の列については自動引継ぎを行わないようルールを追加。
+- 【列ズレの根本的解決】1つのセル内にタプル文字列としてデータが合体してしまうバグを修正。astモジュールで強制的に複数列へ展開。
+- 【スマートカラムマッピング】テキストでの判定を廃止し、「数値・分数の割合と桁数の整合性」のみに基づいて列を自動判別・整列させる仕様。
 - 【列幅の自動調整】作成されたExcelデータの列幅が、セル内の文字数や桁数に合わせて自動的に広がるようになりました。
-- 【新機能】「データ集約のみ」ボタンを追加。
 """
 
 AI_HELP_TEXT = """
@@ -496,7 +496,10 @@ def get_profile_similarity(p1, p2):
     return max(0.0, sim)
 
 def parse_row_data(row_data):
-    """タプル化された文字列などを強制的に配列に展開する"""
+    """
+    タプル化された文字列などを強制的に配列に展開する処理
+    "(None, '図番', ...)" などのエラー形式を救済する。
+    """
     if isinstance(row_data, list) and len(row_data) == 1:
         row_data = row_data[0]
 
@@ -520,7 +523,7 @@ def parse_row_data(row_data):
     return [str(x) if x is not None else "" for x in row_data]
 
 # ==============================
-# 空白セルの自動引継ぎ処理 (ファイル境界越え対応)
+# 空白セルの自動引継ぎ処理
 # ==============================
 def apply_text_inheritance(final_aggregated_data):
     if len(final_aggregated_data) <= 1:
@@ -529,17 +532,14 @@ def apply_text_inheritance(final_aggregated_data):
     def is_text_to_inherit(text):
         if not text: return False
         s = str(text).strip()
-        # 繰り返し記号自体は引き継ぐ元にならない
         if s in ["〃", "”", "\"", "''", "””", "''", "同上"]:
             return False
-        # テキスト（漢字ひらがな等）が含まれていればOK
         if re.search(r'[a-zA-Zａ-ｚＡ-Ｚぁ-んァ-ン一-龥]', s):
             return True
         return False
 
     header = final_aggregated_data[0]
     
-    # 「備考」列は引継ぎから除外
     skip_cols = set()
     for idx, h in enumerate(header):
         if "備考" in str(h):
@@ -550,7 +550,6 @@ def apply_text_inheritance(final_aggregated_data):
             continue
             
         last_text = ""
-        # last_filenameによるリセットを廃止し、ファイル境界を超えて引き継ぐように変更
         for row_idx in range(1, len(final_aggregated_data)):
             cell_val = str(final_aggregated_data[row_idx][col_idx]).strip()
             
@@ -628,11 +627,13 @@ def aggregate_only_task(files):
                     p_master = master_profiles[m_idx]
                     
                     if p_curr["is_text"] and p_master["is_text"]:
+                        # テキスト同士は元の列のインデックス位置の近さを最優先
                         if i == (m_idx - 1):
                             total_score = 1.0
                         else:
                             total_score = 0.5 - abs(i - (m_idx - 1)) * 0.1
                     else:
+                        # 数値・分数データは、プロファイル（整合性・桁数）を絶対優先
                         p_score = get_profile_similarity(p_curr, p_master)
                         total_score = p_score - abs(i - (m_idx - 1)) * 0.05
                     
@@ -672,6 +673,7 @@ def aggregate_only_task(files):
                     if val_str == "None": val_str = ""
                     aligned_row[m_idx] = val_str
             
+            # 元ファイル名以外のセルがすべて空文字なら、集約データに追加しない
             if any(v != "" for v in aligned_row[1:]):
                 aggregated_master_rows.append(aligned_row)
 
@@ -717,7 +719,6 @@ def aggregate_only_task(files):
     if total_files > 0:
         save_dir = get_save_dir(target_files[0])
         if save_dir:
-            agg_base = os.path.basename(selected_folder) if selected_folder else "Manual_Aggregated"
             set_file_progress_indeterminate("集約データを保存中...")
             
             if out_format in ["xlsx", "csv"]:
@@ -831,29 +832,6 @@ def extract_tesseract_task(files):
         except Exception as e:
             print(f"Tesseract Error: {e}")
             raise e
-
-    if total_files > 0:
-        save_dir = get_save_dir(files[0])
-        if save_dir:
-            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            set_file_progress_indeterminate("集約データを保存中...")
-            
-            if out_format == "xlsx" and aggregated_all_rows:
-                wb_agg = Workbook()
-                ws_agg = wb_agg.active
-                ws_agg.title = "集約データ"
-                ws_agg.cell(row=1, column=1, value="元ファイル名")
-                ws_agg.cell(row=1, column=2, value="抽出テキスト")
-                for r_idx, row_data in enumerate(aggregated_all_rows, 2):
-                    ws_agg.cell(row=r_idx, column=1, value=row_data[0])
-                    ws_agg.cell(row=r_idx, column=2, value=row_data[1])
-                auto_adjust_excel_column_width(ws_agg)
-                wb_agg.save(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.xlsx"))
-                
-            elif out_format in ["csv", "txt"] and aggregated_all_texts:
-                ext = "csv" if out_format == "csv" else "txt"
-                with open(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.{ext}"), "w", encoding="utf-8-sig" if ext=="csv" else "utf-8", newline="") as f_out:
-                    f_out.write("\n\n".join(aggregated_all_texts))
 
 def extract_gemini_task(files):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -1161,9 +1139,10 @@ def toggle_api_key_entry(*args):
         api_key_entry.config(state=tk.DISABLED)
         btn_api_test.config(state=tk.DISABLED)
 
+# --- ウィンドウ初期位置を左上（+0+0）に設定 ---
 root = tk.Tk()
 root.title(f"{APP_TITLE} {VERSION}")
-root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
 root.configure(bg=BG_COLOR)
 
 style = ttk.Style()
@@ -1232,7 +1211,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: ファイルの境界を超えて空白セルのテキストをシームレスに引き継ぐよう改善しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: タプル文字列化バグを修正し、数値整合性のみで列を自動マッピングします。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
