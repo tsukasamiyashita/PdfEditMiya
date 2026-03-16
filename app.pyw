@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.9.0
+PdfEditMiya v1.10.0
 ------------------
 更新情報:
-- v1.9.0: 
-  【改善】複数の列データが1つの列に結合されてしまう問題を防ぐため、罫線および空白を列の区切りとして厳格に認識させ、データ結合を禁止する推論プロンプトを追加。
-  【維持】集約データ生成時の「自動列補正ロジック（インデックスベースのマッピング）」はそのまま保持。
+- v1.10.0: 
+  【新機能】「データ集約のみ」ボタンを新設。抽出済みのデータ（xlsx/csv/txt）を後からまとめて1つのマスターファイルに集約可能に。
+  【改善】分割や画像変換時の出力ファイル名の連番に、ファイル総数に応じたゼロ埋め（01〜, 001〜）を自動適用し、ソート順を美しく保持。
 """
 
 import os
@@ -46,7 +46,7 @@ def resource_path(relative_path):
 # 基本設定 & 洗練されたカラーパレット
 # ==============================
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.9.0"
+VERSION = "v1.10.0"
 WINDOW_WIDTH = 700
 WINDOW_HEIGHT = 890
 
@@ -64,12 +64,13 @@ USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
-[ v1.9.0 ]
-- 【データ結合の防止】2つの列が1つに結合されてしまう問題を解決するため、AIに対して「縦の罫線や文字列間の空白を列の区切りとして厳格に認識し、独立したデータとして分割すること」を強制するルールを追加しました。
-- 【集約データの列ズレ自動補正】AIがページごとに列数やキー名を揺らして出力した場合でも、集約データ作成時に「列の順番」を基準にしてマスター列数に強制マッピングする自動補正機能を搭載。
+[ v1.10.0 ]
+- 【新機能】「データ集約のみ」ボタンを追加。抽出済みのExcelやCSVファイルを後からまとめて集約できるようになりました。
+- 【改善】ファイル分割や画像変換時、ファイル総数に合わせて連番の桁数を自動調整し「01〜」「001〜」のようにゼロ埋め処理を適用しました。
 
-[ v1.8.0 ]
-- AIに「各列の意味と空白の発生箇所」を事前分析させる自己推論（Chain of Thought）スキーマを実装。
+[ v1.9.0 ]
+- 【データ結合の防止】2つの列が1つに結合されてしまう問題を解決するプロンプト改修。
+- 【集約データの列ズレ自動補正】集約データ作成時に「列の順番」を基準にしてマスター列数に強制マッピングする自動補正機能を搭載。
 """
 
 AI_HELP_TEXT = """
@@ -170,7 +171,7 @@ def test_api_key_ui():
 def get_target_files():
     if current_mode == "file": return selected_files
     if current_mode == "folder" and selected_folder:
-        return [os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith(".pdf")]
+        return [os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt"))]
     return []
 
 def get_save_dir(original_path):
@@ -196,14 +197,14 @@ def on_save_mode_change():
 
 def select_files():
     global selected_files, selected_folder, current_mode
-    files = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
+    files = filedialog.askopenfilenames(filetypes=[("すべての対応ファイル", "*.pdf;*.xlsx;*.csv;*.txt"), ("PDF", "*.pdf"), ("Excel", "*.xlsx"), ("CSV", "*.csv"), ("Text", "*.txt")])
     if files:
         selected_files, selected_folder, current_mode = list(files), "", "file"
         update_ui()
 
 def select_folder():
     global selected_folder, selected_files, current_mode
-    folder = filedialog.askdirectory(title="PDFフォルダを選択")
+    folder = filedialog.askdirectory(title="フォルダを選択")
     if folder:
         selected_folder, selected_files, current_mode = folder, [], "folder"
         update_ui()
@@ -221,7 +222,7 @@ def run_task(func):
     except Exception as e:
         print(f"Error: {e}")
         close_processing()
-        show_message("❌ エラーが発生しました", ERROR)
+        show_message(f"❌ エラーが発生しました\n{str(e)[:30]}...", ERROR)
 
 def safe_run(func):
     files = get_target_files()
@@ -252,8 +253,8 @@ def show_message(msg, color=PRIMARY):
         
         frame = tk.Frame(win, bg=CARD_BG, highlightbackground=color, highlightthickness=2)
         frame.pack(expand=True, fill=tk.BOTH)
-        ttk.Label(frame, text=msg, foreground=color, font=("Segoe UI", 11, "bold"), background=CARD_BG).pack(expand=True)
-        win.after(2200, win.destroy)
+        ttk.Label(frame, text=msg, foreground=color, font=("Segoe UI", 10, "bold"), background=CARD_BG, wraplength=240).pack(expand=True)
+        win.after(2500, win.destroy)
     root.after(0, _task)
 
 def show_processing(total_files=1):
@@ -339,6 +340,8 @@ def show_readme():
 # PDF操作コア機能
 # ==============================
 def merge_pdfs(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     total_files = len(files)
     writer = PdfWriter()
     update_overall_progress(0, total_files, f"全体の進捗 ( 0 / {total_files} ファイル )")
@@ -357,6 +360,8 @@ def merge_pdfs(files):
             writer.write(out)
 
 def split_pdfs(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     total_files = len(files)
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -365,14 +370,22 @@ def split_pdfs(files):
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         total_pages = len(reader.pages)
+        
+        # 連番の桁数を自動調整（最低2桁を保証）
+        digits = max(2, len(str(total_pages)))
+        
         for n, p in enumerate(reader.pages, 1):
             set_file_progress_determinate(n, total_pages, f"ファイルを分割中... ( {n} / {total_pages} ページ )")
             writer = PdfWriter()
             writer.add_page(p)
-            with open(os.path.join(save_dir, f"{base}_Split_{n}.pdf"), "wb") as out:
+            
+            n_str = str(n).zfill(digits) # ゼロ埋め処理
+            with open(os.path.join(save_dir, f"{base}_Split_{n_str}.pdf"), "wb") as out:
                 writer.write(out)
 
 def rotate_pdfs(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     deg = rotate_option.get()
     total_files = len(files)
     for i, f in enumerate(files, 1):
@@ -391,6 +404,8 @@ def rotate_pdfs(files):
             writer.write(out)
 
 def extract_text(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     total_files = len(files)
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -408,7 +423,121 @@ def extract_text(files):
             out.write(text)
 
 # ==============================
-# AI抽出ロジック (データ結合防止＆集約時の自動列補正)
+# 新設: データ集約のみタスク
+# ==============================
+def aggregate_only_task(files):
+    out_format = output_format_var.get()
+    target_files = []
+    
+    # 選択されたファイル、またはPDFに関連する抽出データを収集
+    for f in files:
+        ext = os.path.splitext(f)[1].lower()
+        if ext == ".pdf":
+            base = os.path.splitext(f)[0]
+            cand_ai = f"{base}_AI抽出.{out_format}"
+            cand_tess = f"{base}_Tesseract抽出.{out_format}"
+            if os.path.exists(cand_ai): target_files.append(cand_ai)
+            elif os.path.exists(cand_tess): target_files.append(cand_tess)
+        elif ext == f".{out_format}":
+            target_files.append(f)
+            
+    if not target_files:
+        raise Exception(f"指定された出力形式 (.{out_format}) のデータが見つかりません。\n該当するファイルを選択するか、先にAI抽出を実行してください。")
+
+    total_files = len(target_files)
+    aggregated_master_header = []
+    aggregated_master_rows = []
+    aggregated_all_texts = []
+    master_col_count = 5
+    
+    for i, f in enumerate(target_files, 1):
+        update_overall_progress(i, total_files, f"データを集約中... ( {i} / {total_files} ファイル )")
+        set_file_progress_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
+        
+        filename = os.path.basename(f)
+        for suffix in [f"_AI抽出.{out_format}", f"_Tesseract抽出.{out_format}"]:
+            if filename.endswith(suffix):
+                filename = filename.replace(suffix, ".pdf")
+                break
+                
+        try:
+            if out_format == "xlsx":
+                import openpyxl
+                wb = openpyxl.load_workbook(f, data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    rows = list(ws.iter_rows(values_only=True))
+                    if not rows: continue
+                    
+                    header = [str(x) if x is not None else "" for x in rows[0]]
+                    if not aggregated_master_header:
+                        aggregated_master_header = ["元ファイル名"] + header
+                        master_col_count = len(header)
+                    
+                    for row_data in rows[1:]:
+                        safe_row = [str(x) if x is not None else "" for x in row_data]
+                        safe_row = (safe_row + [""] * master_col_count)[:master_col_count]
+                        aggregated_master_rows.append([filename] + safe_row)
+                wb.close()
+                
+            elif out_format == "csv":
+                with open(f, "r", encoding="utf-8-sig") as f_in:
+                    reader = csv.reader(f_in)
+                    rows = list(reader)
+                    if not rows: continue
+                    
+                    header = rows[0]
+                    if not aggregated_master_header:
+                        aggregated_master_header = ["元ファイル名"] + header
+                        master_col_count = len(header)
+                        
+                    for row_data in rows[1:]:
+                        safe_row = (row_data + [""] * master_col_count)[:master_col_count]
+                        aggregated_master_rows.append([filename] + safe_row)
+                        
+            elif out_format == "txt":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    text = f_in.read()
+                    aggregated_all_texts.append(f"[{filename}]\n{text}")
+                    
+        except Exception as e:
+            print(f"Error reading {f}: {e}")
+            
+        set_file_progress_determinate(100, 100, "完了")
+        time.sleep(0.05)
+        
+    if total_files > 0:
+        save_dir = get_save_dir(target_files[0])
+        if save_dir:
+            agg_base = os.path.basename(selected_folder) if selected_folder else "Manual_Aggregated"
+            set_file_progress_indeterminate("集約データを保存中...")
+            
+            if out_format in ["xlsx", "csv"]:
+                final_aggregated_data = []
+                if aggregated_master_header:
+                    final_aggregated_data.append(aggregated_master_header)
+                final_aggregated_data.extend(aggregated_master_rows)
+
+                if out_format == "xlsx" and final_aggregated_data:
+                    wb_agg = Workbook()
+                    ws_agg = wb_agg.active
+                    ws_agg.title = "集約データ"
+                    for r_idx, row_data in enumerate(final_aggregated_data, 1):
+                        for c_idx, val in enumerate(row_data, 1):
+                            ws_agg.cell(row=r_idx, column=c_idx, value=str(val).strip())
+                    wb_agg.save(os.path.join(save_dir, f"{agg_base}_データ集約のみ.xlsx"))
+                    
+                elif out_format == "csv" and final_aggregated_data:
+                    with open(os.path.join(save_dir, f"{agg_base}_データ集約のみ.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
+                        writer = csv.writer(f_out)
+                        writer.writerows(final_aggregated_data)
+                        
+            elif out_format == "txt" and aggregated_all_texts:
+                with open(os.path.join(save_dir, f"{agg_base}_データ集約のみ.txt"), "w", encoding="utf-8") as f_out:
+                    f_out.write("\n\n".join(aggregated_all_texts))
+
+# ==============================
+# AI抽出ロジック
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -424,6 +553,8 @@ def run_ai_extraction():
         safe_run(extract_tesseract_task)
 
 def extract_tesseract_task(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     out_format = output_format_var.get()
     total_files = len(files)
     aggregated_all_rows = []
@@ -438,6 +569,7 @@ def extract_tesseract_task(files):
             filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
+            digits = max(2, len(str(total_pages)))
             
             wb = Workbook() if out_format == "xlsx" else None
             if wb: wb.remove(wb.active)
@@ -453,7 +585,8 @@ def extract_tesseract_task(files):
                 try:
                     text = pytesseract.image_to_string(img, lang="jpn+eng")
                     if out_format == "xlsx":
-                        ws = wb.create_sheet(f"Page_{page_num+1}")
+                        page_str = str(page_num+1).zfill(digits)
+                        ws = wb.create_sheet(f"Page_{page_str}")
                         for row_idx, line in enumerate(text.split('\n'), 1):
                             ws.cell(row=row_idx, column=1, value=line.strip())
                             aggregated_all_rows.append([filename, line.strip()])
@@ -463,7 +596,8 @@ def extract_tesseract_task(files):
                 except Exception as e:
                     err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
                     if out_format == "xlsx":
-                        ws = wb.create_sheet(f"Page_{page_num+1}")
+                        page_str = str(page_num+1).zfill(digits)
+                        ws = wb.create_sheet(f"Page_{page_str}")
                         ws.cell(row=1, column=1, value=err_msg)
                     else:
                         all_text_list.append(err_msg)
@@ -508,6 +642,8 @@ def extract_tesseract_task(files):
                     f_out.write("\n\n".join(aggregated_all_texts))
 
 def extract_gemini_task(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     key = api_key_var.get().strip()
     genai.configure(api_key=key)
     models_to_try = get_available_models(key)
@@ -546,7 +682,7 @@ def extract_gemini_task(files):
     
     aggregated_master_header = []
     aggregated_master_rows = []
-    master_col_count = 5 # 集約時の自動補正基準列数
+    master_col_count = 5 
     aggregated_all_texts = []
 
     for i, f in enumerate(files, 1):
@@ -559,6 +695,7 @@ def extract_gemini_task(files):
             filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
+            digits = max(2, len(str(total_pages)))
             
             wb = Workbook() if out_format == "xlsx" else None
             if wb: wb.remove(wb.active)
@@ -566,7 +703,7 @@ def extract_gemini_task(files):
             
             for page_num in range(total_pages):
                 set_file_progress_determinate(0, 100, f"AIが画像を補正中... ( {page_num+1} / {total_pages} ページ )")
-                ws = wb.create_sheet(f"Page_{page_num+1}") if wb else None
+                ws = wb.create_sheet(f"Page_{str(page_num+1).zfill(digits)}") if wb else None
                 
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=300)
@@ -621,7 +758,6 @@ def extract_gemini_task(files):
                                 col_keys = ["col1", "col2", "col3", "col4", "col5"]
                                 safe_header = ["", "", "", "", ""]
                             
-                            # マスターヘッダーの登録。1ページ目の列数を集約時の自動補正の基準とする
                             if not aggregated_master_header and any(safe_header):
                                 aggregated_master_header = ["元ファイル名"] + safe_header
                                 master_col_count = len(safe_header)
@@ -633,17 +769,15 @@ def extract_gemini_task(files):
                             rows = data.get("rows", [])
                             for row_data in rows:
                                 if isinstance(row_data, dict):
-                                    # 個別ファイル: AIが出力したそのページの構造をそのまま維持
                                     safe_row_local = [str(row_data.get(k, "")).strip() for k in col_keys]
                                     page_data_to_write.append(safe_row_local)
                                     
-                                    # 集約ファイル: インデックスベースでマスター列数に自動補正（列・行のズレを強制的に防ぐ）
                                     row_values = [str(row_data.get(k, "")).strip() for k in col_keys]
                                     target_len = master_col_count if master_col_count > 0 else 5
                                     safe_row_master = (row_values + [""] * target_len)[:target_len]
                                     aggregated_master_rows.append([filename] + safe_row_master)
                                     
-                                elif isinstance(row_data, list): # フォールバック
+                                elif isinstance(row_data, list):
                                     safe_row_local = (row_data + [""] * len(col_keys))[:len(col_keys)]
                                     safe_row_local = [str(x).strip() for x in safe_row_local]
                                     page_data_to_write.append(safe_row_local)
@@ -727,6 +861,8 @@ def extract_gemini_task(files):
                     f_out.write("\n\n".join(aggregated_all_texts))
 
 def convert_to_excel(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     border_style = Side(border_style="thin", color="000000")
     total_files = len(files)
     for i, pdf_path in enumerate(files, 1):
@@ -736,11 +872,12 @@ def convert_to_excel(files):
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 total_pages = len(pdf.pages)
+                digits = max(2, len(str(total_pages)))
                 for page_idx, page in enumerate(pdf.pages, 1):
                     set_file_progress_determinate(page_idx, total_pages, f"表データをExcelへ変換中... ( {page_idx} / {total_pages} ページ )")
                     tables = page.extract_tables()
                     if not tables: continue
-                    ws = wb.create_sheet(f"Page_{page_idx}")
+                    ws = wb.create_sheet(f"Page_{str(page_idx).zfill(digits)}")
                     current_row = 1
                     for table in tables:
                         for row_data in table:
@@ -757,6 +894,8 @@ def convert_to_excel(files):
             print(f"Excel Error: {e}")
 
 def convert_to_image(files, ext):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     total_files = len(files)
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -765,11 +904,15 @@ def convert_to_image(files, ext):
         if not save_dir: return
         base = os.path.splitext(os.path.basename(f))[0]
         total_pages = len(doc)
+        digits = max(2, len(str(total_pages)))
         for n, page in enumerate(doc, 1):
             set_file_progress_determinate(n, total_pages, f"画像へ変換中... ( {n} / {total_pages} ページ )")
-            page.get_pixmap(dpi=200).save(os.path.join(save_dir, f"{base}_{n}.{ext}"))
+            n_str = str(n).zfill(digits)
+            page.get_pixmap(dpi=200).save(os.path.join(save_dir, f"{base}_{n_str}.{ext}"))
 
 def convert_to_dxf(files):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
     total_files = len(files)
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -834,7 +977,7 @@ def update_ui():
     is_active = current_mode is not None
     
     state_val = tk.NORMAL if is_active else tk.DISABLED
-    for b in [btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract]:
+    for b in [btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract, btn_aggregate]:
         b.config(state=state_val)
     btn_merge.config(state=tk.NORMAL if current_mode=="folder" else tk.DISABLED)
 
@@ -859,7 +1002,6 @@ style.configure("Card.TFrame", background=CARD_BG)
 style.configure("Card.TLabelframe", background=CARD_BG, borderwidth=1, bordercolor=BORDER_COLOR)
 style.configure("Card.TLabelframe.Label", background=CARD_BG, foreground=PRIMARY, font=("Segoe UI", 11, "bold"))
 
-# ボタンデザインの洗練
 style.configure("TButton", padding=6, font=("Segoe UI", 10), background="#E9ECEF", foreground=TEXT_COLOR, borderwidth=1)
 style.map("TButton", background=[("active", "#DEE2E6")])
 style.configure("Primary.TButton", background=PRIMARY, foreground="white", borderwidth=0)
@@ -895,7 +1037,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: 異なるデータが1つの列に結合されてしまう現象を防止する推論ルールを追加しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: 「データ集約のみ」機能を追加し、出力時の連番を自動で0埋めする仕様にしました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
@@ -916,7 +1058,7 @@ settings_grid.columnconfigure(1, weight=1)
 
 save_frame = ttk.LabelFrame(settings_grid, text=" 保存先設定 ", style="Card.TLabelframe", padding=12)
 save_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-ttk.Radiobutton(save_frame, text="元のPDFと同じフォルダ", variable=save_option, value=1, command=on_save_mode_change).pack(anchor="w", pady=4)
+ttk.Radiobutton(save_frame, text="元のファイルと同じフォルダ", variable=save_option, value=1, command=on_save_mode_change).pack(anchor="w", pady=4)
 ttk.Radiobutton(save_frame, text="任意のフォルダを指定", variable=save_option, value=2, command=on_save_mode_change).pack(anchor="w", pady=4)
 ttk.Button(save_frame, text="📂 フォルダ参照", command=select_save_dir).pack(pady=(10, 5))
 save_label = ttk.Label(save_frame, text="同じフォルダ", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 9))
@@ -963,13 +1105,18 @@ btn_merge = ttk.Button(op_inner, text="結合", width=14, command=lambda: safe_r
 btn_split = ttk.Button(op_inner, text="分割", width=14, command=lambda: safe_run(split_pdfs))
 btn_rotate = ttk.Button(op_inner, text="回転", width=14, command=lambda: safe_run(rotate_pdfs))
 btn_text = ttk.Button(op_inner, text="Text抽出", width=14, command=lambda: safe_run(extract_text))
+
 btn_excel = ttk.Button(op_inner, text="Excel変換", width=14, command=lambda: safe_run(convert_to_excel))
 btn_jpeg = ttk.Button(op_inner, text="JPEG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "jpg")))
 btn_png = ttk.Button(op_inner, text="PNG変換", width=14, command=lambda: safe_run(lambda fs: convert_to_image(fs, "png")))
 btn_dxf = ttk.Button(op_inner, text="DXF変換", width=14, command=lambda: safe_run(convert_to_dxf))
-btn_ai_extract = ttk.Button(op_inner, text="AIデータ抽出", width=14, command=run_ai_extraction, style="Primary.TButton")
 
-op_list = [btn_merge, btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract]
+btn_ai_extract = ttk.Button(op_inner, text="AIデータ抽出", width=14, command=run_ai_extraction, style="Primary.TButton")
+# 新機能: 集約のみボタン
+btn_aggregate = ttk.Button(op_inner, text="データ集約のみ", width=14, command=lambda: safe_run(aggregate_only_task), style="Primary.TButton")
+
+# 元のレイアウト（4列のグリッド）を維持して配置
+op_list = [btn_merge, btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract, btn_aggregate]
 for i, b in enumerate(op_list):
     b.grid(row=i//4, column=i%4, padx=10, pady=10)
 
