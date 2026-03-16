@@ -3,9 +3,8 @@
 PdfEditMiya v1.10.0
 ------------------
 更新情報:
-- v1.10.0 (Update 11): 
-  【改善】集約データ作成時の出力ファイル名を、親フォルダ名等に依存させず、常に「データ集約」となるように固定化。
-  【維持】不要な空白行の削除、タプル展開バグ修正、数値プロファイリングによる自動列マッピング機能はすべて保持。
+- v1.10.0 (Update 9): 
+  【改善】集約データの空白セル自動引継ぎにおいて、ファイルが切り替わった場合でも引継ぎをリセットせず、前のファイルのテキストをシームレスに引き継ぐようにロジックを改修。
 """
 
 import os
@@ -69,11 +68,11 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
 [ v1.10.0 ]
-- 【ファイル名の固定化】集約データ出力時のファイル名を常に「データ集約.xlsx（または.csv/.txt）」となるように改善しました。
-- 【空行の自動削除】集約データにおいて、ファイル名以外のデータが存在しない不要な空白行を自動的に削除して出力する機能を実装しました。
+- 【ファイル境界越えの引継ぎ】集約データのテキスト自動補完において、別のファイルに移った際にも直前のテキストを引き継ぐように改善しました。
 - 【列ズレの根本的解決】1つのセル内にタプル文字列としてデータが合体してしまうバグを修正。astモジュールで強制的に複数列へ展開します。
 - 【スマートカラムマッピング】テキスト（カラム名）での判定を廃止し、「数値・分数の割合と桁数の整合性」のみに基づいて列を自動判別・整列させる仕様に変更。テキスト列は元の順番を維持します。
-- 【機能分離】AIデータ抽出時は個別ファイルのみ作成し、集約データは専用の「データ集約」ボタンからのみ作成するようアーキテクチャを改善。
+- 【列幅の自動調整】作成されたExcelデータの列幅が、セル内の文字数や桁数に合わせて自動的に広がるようになりました。
+- 【新機能】「データ集約のみ」ボタンを追加。
 """
 
 AI_HELP_TEXT = """
@@ -497,6 +496,7 @@ def get_profile_similarity(p1, p2):
     return max(0.0, sim)
 
 def parse_row_data(row_data):
+    """タプル化された文字列などを強制的に配列に展開する"""
     if isinstance(row_data, list) and len(row_data) == 1:
         row_data = row_data[0]
 
@@ -520,7 +520,51 @@ def parse_row_data(row_data):
     return [str(x) if x is not None else "" for x in row_data]
 
 # ==============================
-# データ集約 タスク (完全分離)
+# 空白セルの自動引継ぎ処理 (ファイル境界越え対応)
+# ==============================
+def apply_text_inheritance(final_aggregated_data):
+    if len(final_aggregated_data) <= 1:
+        return
+        
+    def is_text_to_inherit(text):
+        if not text: return False
+        s = str(text).strip()
+        # 繰り返し記号自体は引き継ぐ元にならない
+        if s in ["〃", "”", "\"", "''", "””", "''", "同上"]:
+            return False
+        # テキスト（漢字ひらがな等）が含まれていればOK
+        if re.search(r'[a-zA-Zａ-ｚＡ-Ｚぁ-んァ-ン一-龥]', s):
+            return True
+        return False
+
+    header = final_aggregated_data[0]
+    
+    # 「備考」列は引継ぎから除外
+    skip_cols = set()
+    for idx, h in enumerate(header):
+        if "備考" in str(h):
+            skip_cols.add(idx)
+
+    for col_idx in range(1, len(header)):
+        if col_idx in skip_cols:
+            continue
+            
+        last_text = ""
+        # last_filenameによるリセットを廃止し、ファイル境界を超えて引き継ぐように変更
+        for row_idx in range(1, len(final_aggregated_data)):
+            cell_val = str(final_aggregated_data[row_idx][col_idx]).strip()
+            
+            if cell_val == "" or cell_val == "None" or cell_val in ["〃", "”", "\"", "''", "””", "''", "同上"]:
+                if last_text:
+                    final_aggregated_data[row_idx][col_idx] = last_text
+            else:
+                if is_text_to_inherit(cell_val):
+                    last_text = cell_val
+                else:
+                    last_text = ""
+
+# ==============================
+# データ集約のみタスク
 # ==============================
 def aggregate_only_task(files):
     out_format = output_format_var.get()
@@ -628,7 +672,6 @@ def aggregate_only_task(files):
                     if val_str == "None": val_str = ""
                     aligned_row[m_idx] = val_str
             
-            # 元ファイル名以外のセルがすべて空文字なら、集約データに追加しない
             if any(v != "" for v in aligned_row[1:]):
                 aggregated_master_rows.append(aligned_row)
 
@@ -674,6 +717,7 @@ def aggregate_only_task(files):
     if total_files > 0:
         save_dir = get_save_dir(target_files[0])
         if save_dir:
+            agg_base = os.path.basename(selected_folder) if selected_folder else "Manual_Aggregated"
             set_file_progress_indeterminate("集約データを保存中...")
             
             if out_format in ["xlsx", "csv"]:
@@ -681,6 +725,8 @@ def aggregate_only_task(files):
                 for row_data in aggregated_master_rows:
                     padded_row = (row_data + [""] * len(aggregated_master_header))[:len(aggregated_master_header)]
                     final_aggregated_data.append(padded_row)
+
+                apply_text_inheritance(final_aggregated_data)
 
                 if out_format == "xlsx" and len(final_aggregated_data) > 1:
                     wb_agg = Workbook()
@@ -690,22 +736,19 @@ def aggregate_only_task(files):
                         for c_idx, val in enumerate(row_data, 1):
                             ws_agg.cell(row=r_idx, column=c_idx, value=str(val).strip())
                     auto_adjust_excel_column_width(ws_agg)
-                    # 【変更】出力ファイル名を「データ集約.xlsx」に固定
                     wb_agg.save(os.path.join(save_dir, "データ集約.xlsx"))
                     
                 elif out_format == "csv" and len(final_aggregated_data) > 1:
-                    # 【変更】出力ファイル名を「データ集約.csv」に固定
                     with open(os.path.join(save_dir, "データ集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
                         writer = csv.writer(f_out)
                         writer.writerows(final_aggregated_data)
                         
             elif out_format == "txt" and aggregated_all_texts:
-                # 【変更】出力ファイル名を「データ集約.txt」に固定
                 with open(os.path.join(save_dir, "データ集約.txt"), "w", encoding="utf-8") as f_out:
                     f_out.write("\n\n".join(aggregated_all_texts))
 
 # ==============================
-# AI抽出ロジック (抽出機能のみ)
+# AI抽出ロジック
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -725,6 +768,8 @@ def extract_tesseract_task(files):
     if not files: raise Exception("PDFファイルが含まれていません。")
     out_format = output_format_var.get()
     total_files = len(files)
+    aggregated_all_rows = []
+    aggregated_all_texts = []
     
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -732,6 +777,7 @@ def extract_tesseract_task(files):
             save_dir = get_save_dir(f)
             if not save_dir: return
             base = os.path.splitext(os.path.basename(f))[0]
+            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             digits = max(2, len(str(total_pages)))
@@ -754,9 +800,11 @@ def extract_tesseract_task(files):
                         ws = wb.create_sheet(f"Page_{page_str}")
                         for row_idx, line in enumerate(text.split('\n'), 1):
                             ws.cell(row=row_idx, column=1, value=line.strip())
+                            aggregated_all_rows.append([filename, line.strip()])
                         auto_adjust_excel_column_width(ws)
                     else:
                         all_text_list.append(text)
+                        aggregated_all_texts.append(f"[{filename}] {text}")
                 except Exception as e:
                     err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
                     if out_format == "xlsx":
@@ -783,6 +831,29 @@ def extract_tesseract_task(files):
         except Exception as e:
             print(f"Tesseract Error: {e}")
             raise e
+
+    if total_files > 0:
+        save_dir = get_save_dir(files[0])
+        if save_dir:
+            agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
+            set_file_progress_indeterminate("集約データを保存中...")
+            
+            if out_format == "xlsx" and aggregated_all_rows:
+                wb_agg = Workbook()
+                ws_agg = wb_agg.active
+                ws_agg.title = "集約データ"
+                ws_agg.cell(row=1, column=1, value="元ファイル名")
+                ws_agg.cell(row=1, column=2, value="抽出テキスト")
+                for r_idx, row_data in enumerate(aggregated_all_rows, 2):
+                    ws_agg.cell(row=r_idx, column=1, value=row_data[0])
+                    ws_agg.cell(row=r_idx, column=2, value=row_data[1])
+                auto_adjust_excel_column_width(ws_agg)
+                wb_agg.save(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.xlsx"))
+                
+            elif out_format in ["csv", "txt"] and aggregated_all_texts:
+                ext = "csv" if out_format == "csv" else "txt"
+                with open(os.path.join(save_dir, f"{agg_base}_Tesseract抽出_集約.{ext}"), "w", encoding="utf-8-sig" if ext=="csv" else "utf-8", newline="") as f_out:
+                    f_out.write("\n\n".join(aggregated_all_texts))
 
 def extract_gemini_task(files):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -910,7 +981,6 @@ def extract_gemini_task(files):
                             for row_data in rows:
                                 parsed_r = parse_row_data(row_data)
                                 safe_row_local = (parsed_r + [""] * page_col_count)[:page_col_count]
-                                # 不要な空白行はスキップ
                                 if any(v != "" for v in safe_row_local):
                                     page_data_to_write.append(safe_row_local)
 
@@ -1162,7 +1232,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: 集約時のファイル名固定化と、不要な空白行の完全削除機能を搭載しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: ファイルの境界を超えて空白セルのテキストをシームレスに引き継ぐよう改善しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
