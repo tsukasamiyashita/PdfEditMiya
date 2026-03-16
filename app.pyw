@@ -972,7 +972,8 @@ def extract_gemini_task(files):
                                 csv_lines = []
                                 for r_data in page_data_to_write:
                                     clean_row = [v if v != "None" else "" for v in r_data]
-                                    csv_lines.append(",".join(f'"{val.replace('"', '""')}"' if ',' in val or '"' in val else val for val in clean_row))
+                                    # Python 3.11以下の構文エラーを防ぐため .format() を使用して修正
+                                    csv_lines.append(",".join('"{}"'.format(val.replace('"', '""')) if ',' in val or '"' in val else val for val in clean_row))
                                 all_text_list.append("\n".join(csv_lines))
 
                         except json.JSONDecodeError as e:

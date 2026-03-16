@@ -22,12 +22,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # requirements.txt から ezdxf と PyQt6 をインストール
         pip install -r requirements.txt
-        # exe化ツールのインストール
         pip install pyinstaller
 
-    # PyInstallerでexe化の実行
+    # PyInstallerでexe化の実行 (PyQt6の不要なcollectを削除)
     - name: Build with PyInstaller
       run: >
         pyinstaller 
@@ -36,7 +34,6 @@ jobs:
         --clean 
         --name "PdfEditMiya-v1.10.0" 
         --add-data "README.md;."
-        --collect-all PyQt6
         app.pyw
 
     # 完成したexeファイルをGitHub上にアップロード
