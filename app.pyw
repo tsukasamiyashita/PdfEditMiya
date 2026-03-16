@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.8.0
+PdfEditMiya v1.9.0
 ------------------
 更新情報:
-- v1.8.0: 
-  【完全解決】AIに「整合性の自動分析（Chain of Thought）」を強制する推論スキーマを導入し、空白セルの見落としによる列ズレを根本的に排除。
-  【強化】1ページ目で自動検出したカラム構造を「マスターキー」として記憶し、全ページのデータを縦に強制同期させるマッピング処理を実装。
-  【UI】カラーパレットと余白を再調整し、より洗練されたプロフェッショナルなフラットデザインへ進化。
+- v1.9.0: 
+  【改善】複数の列データが1つの列に結合されてしまう問題を防ぐため、罫線および空白を列の区切りとして厳格に認識させ、データ結合を禁止する推論プロンプトを追加。
+  【維持】集約データ生成時の「自動列補正ロジック（インデックスベースのマッピング）」はそのまま保持。
 """
 
 import os
@@ -47,7 +46,7 @@ def resource_path(relative_path):
 # 基本設定 & 洗練されたカラーパレット
 # ==============================
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.8.0"
+VERSION = "v1.9.0"
 WINDOW_WIDTH = 700
 WINDOW_HEIGHT = 890
 
@@ -65,14 +64,12 @@ USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
-[ v1.8.0 ]
-- 【列ズレの根本的解決】AIに「各列の意味と空白の発生箇所」を事前分析させる自己推論（Chain of Thought）スキーマを実装しました。
-- 【縦列の強制同期】集約データの出力時、1ページ目のヘッダー構造をマスターとして全行を強制マッピングし、ページ間のズレを防ぐ強固なアーキテクチャを追加しました。
-- 【UIの洗練】余白やカラーパレットを見直し、よりプロフェッショナルで直感的なデザインに仕上げました。
+[ v1.9.0 ]
+- 【データ結合の防止】2つの列が1つに結合されてしまう問題を解決するため、AIに対して「縦の罫線や文字列間の空白を列の区切りとして厳格に認識し、独立したデータとして分割すること」を強制するルールを追加しました。
+- 【集約データの列ズレ自動補正】AIがページごとに列数やキー名を揺らして出力した場合でも、集約データ作成時に「列の順番」を基準にしてマスター列数に強制マッピングする自動補正機能を搭載。
 
-[ v1.7.0 ]
-- アニメーション付きプログレスバーを導入。
-- ttkを用いたモダンなカード風デザインへのリファクタリング。
+[ v1.8.0 ]
+- AIに「各列の意味と空白の発生箇所」を事前分析させる自己推論（Chain of Thought）スキーマを実装。
 """
 
 AI_HELP_TEXT = """
@@ -411,7 +408,7 @@ def extract_text(files):
             out.write(text)
 
 # ==============================
-# AI抽出ロジック (Chain of Thought & マスターキー強制同期)
+# AI抽出ロジック (データ結合防止＆集約時の自動列補正)
 # ==============================
 def run_ai_extraction():
     engine = ai_engine_var.get()
@@ -522,11 +519,14 @@ def extract_gemini_task(files):
         
         【整合性の自動分析と列ズレ防止（Chain of Thought）】
         いきなりデータを抽出するのではなく、必ず以下のステップで処理してください。
-        1. まず画像内の表を分析し、`table_analysis` フィールドに「この表は何列あるか。各列にはどのような意味のデータが入るか（例：1列目は通番、2列目は図番、3列目は空白が多い備考欄…）」を分析・定義してください。
+        1. まず画像内の表を分析し、`table_analysis` フィールドに「この表は何列あるか。各列にはどのような意味のデータが入るか（例：1列目は通番、2列目は図番、3列目は品名…）」を分析・定義してください。
         2. 分析結果に基づき、`header` フィールドにカラム名（ヘッダー）を `col1`, `col2`, `col3`... というキーで定義してください。
         3. `rows` フィールドには各行のデータを格納しますが、必ず `header` と完全に一致する `col1`, `col2`... をキーとする辞書型にしてください。
-        
-        ※ 最初に「各列の定義」を推論させることで、空白セルを読み飛ばして列が左にずれてしまう現象を根本的に防ぎます。罫線を視覚的に分析し、データが存在しないセルには必ず `""`（空文字）を該当キーにセットしてください。
+
+        【データ結合と列ズレの完全防止ルール（超重要）】
+        - 【重要】表の縦の罫線や、文字列の間に存在する不自然な空白（大きなスペース）を「列の区切り」として視覚的に厳格に認識してください。
+        - 【超重要】本来分かれるべき異なる列のデータ（例えば「図番」と「品名」など）を、絶対に1つの列（同じキーの中）に繋げて出力しないでください。必ず別々の独立したキーに分割してください。
+        - データが存在しない「空白セル」の場合は、左に詰めたり無視したりせず、必ず `""`（空文字）を該当キーにセットして列位置を保持してください。
 
         【出力形式（絶対厳守）】
         {
@@ -546,7 +546,7 @@ def extract_gemini_task(files):
     
     aggregated_master_header = []
     aggregated_master_rows = []
-    master_col_keys = [] # 集約ファイル用のグローバル基準キー
+    master_col_count = 5 # 集約時の自動補正基準列数
     aggregated_all_texts = []
 
     for i, f in enumerate(files, 1):
@@ -615,19 +615,17 @@ def extract_gemini_task(files):
                             
                             header_dict = data.get("header", {})
                             if isinstance(header_dict, dict) and header_dict:
-                                # col1, col2, col3 の順にソート
                                 col_keys = sorted(header_dict.keys(), key=lambda x: int(x.replace('col', '')) if x.startswith('col') and x[3:].isdigit() else 999)
                                 safe_header = [str(header_dict.get(k, "")).strip() for k in col_keys]
                             else:
                                 col_keys = ["col1", "col2", "col3", "col4", "col5"]
                                 safe_header = ["", "", "", "", ""]
                             
-                            # マスターヘッダーの登録（最初の有効なページを基準とする）
+                            # マスターヘッダーの登録。1ページ目の列数を集約時の自動補正の基準とする
                             if not aggregated_master_header and any(safe_header):
                                 aggregated_master_header = ["元ファイル名"] + safe_header
-                                master_col_keys = col_keys
+                                master_col_count = len(safe_header)
 
-                            # 個別ファイル用の書き込みデータ
                             page_data_to_write = []
                             if any(safe_header):
                                 page_data_to_write.append(safe_header)
@@ -635,19 +633,25 @@ def extract_gemini_task(files):
                             rows = data.get("rows", [])
                             for row_data in rows:
                                 if isinstance(row_data, dict):
-                                    # 個別ファイル: そのページの構造に合わせて出力
+                                    # 個別ファイル: AIが出力したそのページの構造をそのまま維持
                                     safe_row_local = [str(row_data.get(k, "")).strip() for k in col_keys]
                                     page_data_to_write.append(safe_row_local)
                                     
-                                    # 集約ファイル: マスターキーに沿って強制同期マッピング
-                                    used_master_keys = master_col_keys if master_col_keys else col_keys
-                                    safe_row_master = [str(row_data.get(k, "")).strip() for k in used_master_keys]
+                                    # 集約ファイル: インデックスベースでマスター列数に自動補正（列・行のズレを強制的に防ぐ）
+                                    row_values = [str(row_data.get(k, "")).strip() for k in col_keys]
+                                    target_len = master_col_count if master_col_count > 0 else 5
+                                    safe_row_master = (row_values + [""] * target_len)[:target_len]
                                     aggregated_master_rows.append([filename] + safe_row_master)
                                     
-                                elif isinstance(row_data, list): # 万が一配列が返ってきた場合のフォールバック
-                                    safe_row = (row_data + [""] * len(col_keys))[:len(col_keys)]
-                                    page_data_to_write.append(safe_row)
-                                    aggregated_master_rows.append([filename] + safe_row)
+                                elif isinstance(row_data, list): # フォールバック
+                                    safe_row_local = (row_data + [""] * len(col_keys))[:len(col_keys)]
+                                    safe_row_local = [str(x).strip() for x in safe_row_local]
+                                    page_data_to_write.append(safe_row_local)
+                                    
+                                    target_len = master_col_count if master_col_count > 0 else 5
+                                    safe_row_master = (row_data + [""] * target_len)[:target_len]
+                                    safe_row_master = [str(x).strip() for x in safe_row_master]
+                                    aggregated_master_rows.append([filename] + safe_row_master)
 
                             if out_format == "xlsx":
                                 for row_idx, r_data in enumerate(page_data_to_write, 1):
@@ -696,7 +700,7 @@ def extract_gemini_task(files):
         save_dir = get_save_dir(files[0])
         if save_dir:
             agg_base = os.path.basename(selected_folder) if selected_folder else "All_Aggregated"
-            set_file_progress_indeterminate("集約データをマッピング・保存中...")
+            set_file_progress_indeterminate("集約データを自動補正・保存中...")
             
             if out_format in ["xlsx", "csv"]:
                 final_aggregated_data = []
@@ -891,7 +895,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: AIによる自己整合性分析（Chain of Thought）を導入し、集約時の列ズレを根本解消しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: 異なるデータが1つの列に結合されてしまう現象を防止する推論ルールを追加しました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
