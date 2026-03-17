@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-PdfEditMiya v1.10.0
+PdfEditMiya v1.11.0
 ------------------
 更新情報:
-- v1.10.0: ウィンドウの初期表示位置を画面左上に固定。その他、集約ロジックやAI抽出機能は最新状態を保持。
+- v1.11.0: 
+  [UI改善] 「抽出範囲を選択(全体)」ボタンの表記を「抽出範囲を選択」に変更。
+  [仕様変更] Gemini APIの複数抽出において、直列処理化による通信安定化。
+  [UI追加] 抽出範囲を選択した状態から「全体」へリセットできるボタンを追加。
+  [安定化強化] Gemini APIのレートリミット対策として、自動クールダウン処理とJitter付き再試行ロジックを追加。
 """
 
 import os
@@ -18,6 +22,7 @@ import json
 import ast
 import difflib
 import re
+import random
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
@@ -29,7 +34,7 @@ from openpyxl.styles import Border, Side
 from openpyxl.utils import get_column_letter
 import fitz  # PyMuPDF
 import ezdxf
-from PIL import Image
+from PIL import Image, ImageTk
 
 import pytesseract
 import google.generativeai as genai
@@ -48,9 +53,9 @@ def resource_path(relative_path):
 # 基本設定 & 洗練されたカラーパレット
 # ==============================
 APP_TITLE = "PdfEditMiya"
-VERSION = "v1.10.0"
+VERSION = "v1.11.0"
 WINDOW_WIDTH = 700
-WINDOW_HEIGHT = 890
+WINDOW_HEIGHT = 920
 
 BG_COLOR = "#F0F4F8"          
 CARD_BG = "#FFFFFF"           
@@ -66,28 +71,61 @@ USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 
 VERSION_HISTORY = """
-[ v1.10.0 ]
-- 【レイアウト固定】アプリ起動時のウィンドウ表示位置を画面左上に固定しました。
-- 【引継ぎ処理の強化】「〃」などの繰り返し記号がある場合も、上の行のテキストを引き継ぐように改善。
-- 【引継ぎの例外設定】「備考」の列については自動引継ぎを行わないようルールを追加。
-- 【列ズレの根本的解決】1つのセル内にタプル文字列としてデータが合体してしまうバグを修正。astモジュールで強制的に複数列へ展開。
-- 【スマートカラムマッピング】テキストでの判定を廃止し、「数値・分数の割合と桁数の整合性」のみに基づいて列を自動判別・整列させる仕様。
-- 【列幅の自動調整】作成されたExcelデータの列幅が、セル内の文字数や桁数に合わせて自動的に広がるようになりました。
+[ v1.11.0 ]
+- 【安定化】APIの接続制限による遅延を回避するため、Gemini複数領域抽出の通信を安定した直列処理へ戻しました。
+- 【安定化強化】Gemini APIのレートリミット(429エラー)対策として、リクエスト間の自動クールダウン(待機)と、Jitter(揺らぎ)を伴う再試行ロジックを実装。大量ページの連続処理時の安定性が劇的に向上しました。
+- 【UI改善】抽出範囲ボタンの表記をシンプルにし、「全体に戻す」リセットボタンを追加しました。
+
+[ v1.10.0 系 ]
+- 【レイアウト固定】アプリ起動時のウィンドウ表示位置を画面左上に固定。
+- 【スマートカラムマッピング】数値・分数の割合と桁数の整合性による自動列マッピング。
+- 【列の分割と1列化】複数領域を指定した場合、1つの領域＝1つの列として横並びで出力する機能。
+- 【ページごとの独立ファイル】複数ページPDFの処理時、1ページごとに個別のファイルとして出力。
+- 【ページ番号の自動付与】AI抽出データの先頭列に「現在のページ/総ページ数」を自動追加。
+- 【縦書き文字の自動結合】縦書きの文字が複数行に分割される問題を解消し、横書き1文に結合。
+- 【プレビュー拡大機能】抽出範囲のプレビュー画面に拡大・縮小ボタンとスクロールバーを追加。
+- 【集約順の適正化】データ集約時、ファイルの順番が「更新日時順」になるよう修正。
 """
 
 AI_HELP_TEXT = """
-【 AI抽出機能を使うための準備 】
+【 AI抽出機能の使い方と準備 】
 
+PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキストデータとして抽出する機能です。
+用途に合わせて2つのAIエンジンを切り替えて使用できます。
+
+───────────────────────────
 ■ Gemini API を使う場合（推奨・超高精度）
-1. 以下のURLにアクセスし、Googleアカウントでログインします。
-   https://aistudio.google.com/app/apikey
-2. 「Create API key」ボタンを押し、新しいプロジェクトでAPIキーを作成します。
-3. 発行された文字列をコピーし、本アプリの「APIキー」枠に貼り付け「テスト」ボタンを押してください。
+───────────────────────────
+最新のAIモデルを利用し、かすれた文字や複雑な表の罫線を高精度に認識します。
+インターネット接続と、無料の「APIキー」が必要です。
 
+[APIキーの取得手順]
+1. ブラウザで以下のURLにアクセスします。
+   https://aistudio.google.com/app/apikey
+2. お持ちのGoogleアカウントでログインします。
+3. 画面左上の「Create API key」ボタンを押します。
+4. 「Create API key in new project」を選択します。
+5. 発行された長い英数字の文字列（APIキー）をコピーします。
+6. 本アプリの「APIキー」入力枠に貼り付け、「テスト」ボタンを押してください。
+
+───────────────────────────
 ■ Tesseract を使う場合（オフライン・簡易抽出）
-Windows環境にTesseract OCR本体がインストールされている必要があります。
-1. https://github.com/UB-Mannheim/tesseract/wiki からダウンロード・インストール。
-2. インストール時、「Additional language data (download)」から「Japanese」を選択してください。
+───────────────────────────
+インターネットに繋がっていない環境でも使用できる、無料のOCRソフトです。
+
+[インストール手順]
+1. ブラウザで以下のURLにアクセスします。
+   https://github.com/UB-Mannheim/tesseract/wiki
+2. 「tesseract-ocr-w64-setup...exe」など、最新の64bit版インストーラーをダウンロードして実行します。
+3. インストール中の「Choose Components」画面で、「Additional language data (download)」の中にある「Japanese」および「Japanese (vertical)」に必ずチェックを入れてください。
+4. インストール先は初期設定のまま（C:\\Program Files\\Tesseract-OCR）進めてください。
+
+───────────────────────────
+■ 抽出範囲の選択機能について
+───────────────────────────
+・「抽出範囲を選択」ボタンから、読み取ってほしい表の部分だけをドラッグして囲むことができます。
+・複数の範囲を囲んだ場合、それぞれの範囲のデータが「列」として横に並んで出力されます。
+・全体を抽出したい状態に戻すときは「全体に戻す」ボタンを押してください。
 """
 
 # ==============================
@@ -97,6 +135,7 @@ selected_files = []
 selected_folder = ""
 current_mode = None
 preset_save_dir = ""
+selected_crop_regions = []
 
 processing_popup = None
 overall_label = None
@@ -246,7 +285,7 @@ def run_task(func):
     except Exception as e:
         print(f"Error: {e}")
         close_processing()
-        show_message(f"❌ エラーが発生しました\n{str(e)[:30]}...", ERROR)
+        show_message(f"❌ エラーが発生しました\n{str(e)[:40]}...", ERROR)
 
 def safe_run(func):
     files = get_target_files()
@@ -342,23 +381,221 @@ def set_file_progress_determinate(step, max_val=None, text=None):
 def show_text_window(title, content):
     win = tk.Toplevel(root)
     win.title(title)
-    win.geometry("620x500")
+    win.geometry("620x550")
     win.configure(bg=BG_COLOR)
     x = root.winfo_x() + (WINDOW_WIDTH // 2) - 310
-    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 250
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 275
     win.geometry(f"+{x}+{y}")
     text_area = st.ScrolledText(win, wrap=tk.WORD, font=("Meiryo UI", 10), bg=CARD_BG, fg=TEXT_COLOR, relief=tk.FLAT, padx=15, pady=15)
     text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
     text_area.insert(tk.END, content)
     text_area.configure(state=tk.DISABLED)
 
-def show_ai_help(): show_text_window("AI抽出の準備 (使い方)", AI_HELP_TEXT.strip())
+def show_ai_help(): show_text_window("AI抽出の準備と使い方", AI_HELP_TEXT.strip())
 def show_version_info(): messagebox.showinfo("バージョン情報", f"{APP_TITLE}\nバージョン: {VERSION}\n\nPython & Tkinter製 PDF編集ツール")
 def show_history(): show_text_window("バージョン履歴", VERSION_HISTORY.strip())
 def show_readme():
     p = resource_path("README.md")
     content = open(p, "r", encoding="utf-8").read() if os.path.exists(p) else "READMEが見つかりません。"
     show_text_window("Readme", content)
+
+# ==============================
+# PDFプレビュー・クロップ領域選択機能 (ズーム対応版)
+# ==============================
+class CropSelector:
+    def __init__(self, master, pdf_path):
+        self.top = tk.Toplevel(master)
+        self.top.title("抽出範囲の選択 (複数選択可)")
+        self.top.configure(bg=BG_COLOR)
+        self.top.transient(master)
+        self.top.grab_set()
+
+        self.pdf_path = pdf_path
+        self.zoom = 1.0
+        
+        btn_frame = ttk.Frame(self.top, padding=10)
+        btn_frame.pack(fill=tk.X)
+        
+        ttk.Button(btn_frame, text="クリア", command=self.clear_rects, style="Warning.TButton").pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="設定して閉じる", command=self.save_and_close, style="Primary.TButton").pack(side=tk.RIGHT, padx=5)
+        
+        zoom_frame = ttk.Frame(btn_frame)
+        zoom_frame.pack(side=tk.RIGHT, padx=20)
+        ttk.Button(zoom_frame, text="拡大 (+)", command=self.zoom_in, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="縮小 (-)", command=self.zoom_out, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="フィット", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
+
+        info_text = "【使い方】ドラッグで抽出範囲を囲みます。拡大/縮小ボタンでサイズ調整可能です。"
+        ttk.Label(btn_frame, text=info_text, foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
+
+        canvas_frame = ttk.Frame(self.top)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        self.vbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+        self.vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.hbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+        self.hbar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.canvas = tk.Canvas(canvas_frame, cursor="cross", bg="white", xscrollcommand=self.hbar.set, yscrollcommand=self.vbar.set)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.vbar.config(command=self.canvas.yview)
+        self.hbar.config(command=self.canvas.xview)
+
+        self.start_x = None
+        self.start_y = None
+        self.current_rect = None
+        self.rectangles = []  
+        
+        self.canvas.bind("<ButtonPress-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        if sys.platform.startswith("win"):
+            self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+
+        try:
+            self.doc = fitz.open(pdf_path)
+            self.page = self.doc[0]
+            self.zoom_fit()
+        except Exception as e:
+            self.top.destroy()
+            raise Exception(f"プレビュー画像の生成に失敗しました。\n詳細: {e}")
+
+        self.top.update_idletasks()
+        w = int(master.winfo_screenwidth() * 0.8)
+        h = int(master.winfo_screenheight() * 0.8)
+        x = (master.winfo_screenwidth() // 2) - (w // 2)
+        y = (master.winfo_screenheight() // 2) - (h // 2)
+        self.top.geometry(f"{w}x{h}+{x}+{y}")
+
+    def draw_image(self):
+        mat = fitz.Matrix(self.zoom, self.zoom)
+        pix = self.page.get_pixmap(matrix=mat)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        self.tk_image = ImageTk.PhotoImage(img)
+        
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
+        self.img_w = pix.width
+        self.img_h = pix.height
+        
+        for r in self.rectangles:
+            x1, y1 = r['rx1'] * self.img_w, r['ry1'] * self.img_h
+            x2, y2 = r['rx2'] * self.img_w, r['ry2'] * self.img_h
+            r['id'] = self.canvas.create_rectangle(x1, y1, x2, y2, outline="red", width=2)
+
+    def zoom_in(self):
+        self.zoom *= 1.2
+        if self.zoom > 5.0: self.zoom = 5.0
+        self.draw_image()
+
+    def zoom_out(self):
+        self.zoom /= 1.2
+        if self.zoom < 0.2: self.zoom = 0.2
+        self.draw_image()
+        
+    def zoom_fit(self):
+        screen_h = self.top.winfo_screenheight() * 0.7
+        self.zoom = screen_h / self.page.rect.height
+        if self.zoom > 2.0: self.zoom = 2.0
+        self.draw_image()
+
+    def on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def on_press(self, event):
+        self.start_x = self.canvas.canvasx(event.x)
+        self.start_y = self.canvas.canvasy(event.y)
+        self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4))
+        
+    def on_drag(self, event):
+        cur_x = self.canvas.canvasx(event.x)
+        cur_y = self.canvas.canvasy(event.y)
+        self.canvas.coords(self.current_rect, self.start_x, self.start_y, cur_x, cur_y)
+        
+    def on_release(self, event):
+        end_x = self.canvas.canvasx(event.x)
+        end_y = self.canvas.canvasy(event.y)
+        if abs(end_x - self.start_x) > 10 and abs(end_y - self.start_y) > 10:
+            self.canvas.itemconfig(self.current_rect, dash=())
+            rx1 = min(self.start_x, end_x) / self.img_w
+            ry1 = min(self.start_y, end_y) / self.img_h
+            rx2 = max(self.start_x, end_x) / self.img_w
+            ry2 = max(self.start_y, end_y) / self.img_h
+            self.rectangles.append({
+                'id': self.current_rect,
+                'rx1': rx1, 'ry1': ry1, 'rx2': rx2, 'ry2': ry2
+            })
+        else:
+            self.canvas.delete(self.current_rect)
+            
+    def clear_rects(self):
+        for r in self.rectangles:
+            self.canvas.delete(r['id'])
+        self.rectangles.clear()
+        
+    def save_and_close(self):
+        global selected_crop_regions
+        selected_crop_regions = [(r['rx1'], r['ry1'], r['rx2'], r['ry2']) for r in self.rectangles]
+        if selected_crop_regions:
+            btn_select_crop.config(text=f"抽出範囲を選択 (設定済: {len(selected_crop_regions)}か所)")
+        else:
+            btn_select_crop.config(text="抽出範囲を選択")
+        self.doc.close()
+        self.top.destroy()
+
+def open_crop_selector():
+    files = get_target_files()
+    pdf_files = [f for f in files if f.lower().endswith('.pdf')]
+    if not pdf_files:
+        messagebox.showinfo("情報", "PDFファイルが選択されていません。プレビューできません。")
+        return
+        
+    first_pdf = pdf_files[0]
+    try:
+        CropSelector(root, first_pdf)
+    except Exception as e:
+        messagebox.showerror("エラー", str(e))
+
+def reset_crop_regions():
+    """抽出範囲をリセットし、全体抽出の状態に戻す"""
+    global selected_crop_regions
+    selected_crop_regions = []
+    btn_select_crop.config(text="抽出範囲を選択")
+
+def merge_2d_arrays_horizontally(arrays_list):
+    if not arrays_list: return []
+    max_rows = max((len(arr) for arr in arrays_list), default=0)
+    merged = []
+    
+    region_max_cols = []
+    for arr in arrays_list:
+        max_c = max((len(row) for row in arr), default=0) if arr else 0
+        region_max_cols.append(max_c)
+        
+    for r in range(max_rows):
+        merged_row = []
+        for i, arr in enumerate(arrays_list):
+            max_c = region_max_cols[i]
+            if arr and r < len(arr):
+                row_data = list(arr[r])
+                row_data += [""] * (max_c - len(row_data))
+                merged_row.extend(row_data)
+            else:
+                merged_row.extend([""] * max_c)
+        merged.append(merged_row)
+    return merged
+
+def check_tesseract_installation():
+    if sys.platform.startswith("win"):
+        tess_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if os.path.exists(tess_path):
+            pytesseract.pytesseract.tesseract_cmd = tess_path
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        raise Exception("Tesseract OCRがインストールされていないか、PATHが通っていません。\nWindowsの場合は https://github.com/UB-Mannheim/tesseract/wiki からインストールしてください。")
 
 # ==============================
 # PDF操作コア機能
@@ -443,7 +680,7 @@ def extract_text(files):
             out.write(text)
 
 # ==============================
-# プロファイリング・スマートマッピング機能 (数値整合性特化)
+# プロファイリング・スマートマッピング機能
 # ==============================
 def analyze_column_profile(col_data):
     if not col_data: 
@@ -496,10 +733,6 @@ def get_profile_similarity(p1, p2):
     return max(0.0, sim)
 
 def parse_row_data(row_data):
-    """
-    タプル化された文字列などを強制的に配列に展開する処理
-    "(None, '図番', ...)" などのエラー形式を救済する。
-    """
     if isinstance(row_data, list) and len(row_data) == 1:
         row_data = row_data[0]
 
@@ -522,9 +755,6 @@ def parse_row_data(row_data):
     
     return [str(x) if x is not None else "" for x in row_data]
 
-# ==============================
-# 空白セルの自動引継ぎ処理
-# ==============================
 def apply_text_inheritance(final_aggregated_data):
     if len(final_aggregated_data) <= 1:
         return
@@ -573,12 +803,15 @@ def aggregate_only_task(files):
         ext = os.path.splitext(f)[1].lower()
         if ext == ".pdf":
             base = os.path.splitext(f)[0]
-            cand_ai = f"{base}_AI抽出.{out_format}"
-            cand_tess = f"{base}_Tesseract抽出.{out_format}"
-            if os.path.exists(cand_ai): target_files.append(cand_ai)
-            elif os.path.exists(cand_tess): target_files.append(cand_tess)
+            dir_path = os.path.dirname(f)
+            for f_name in os.listdir(dir_path):
+                if f_name.startswith(base) and f_name.endswith(f".{out_format}") and ("_AI抽出" in f_name or "_Tesseract抽出" in f_name):
+                    target_files.append(os.path.join(dir_path, f_name))
         elif ext == f".{out_format}":
             target_files.append(f)
+            
+    target_files = list(set(target_files))
+    target_files.sort(key=lambda x: os.path.getmtime(x))
             
     if not target_files:
         raise Exception(f"指定された出力形式 (.{out_format}) のデータが見つかりません。\n事前に抽出処理を行ってください。")
@@ -627,13 +860,11 @@ def aggregate_only_task(files):
                     p_master = master_profiles[m_idx]
                     
                     if p_curr["is_text"] and p_master["is_text"]:
-                        # テキスト同士は元の列のインデックス位置の近さを最優先
                         if i == (m_idx - 1):
                             total_score = 1.0
                         else:
                             total_score = 0.5 - abs(i - (m_idx - 1)) * 0.1
                     else:
-                        # 数値・分数データは、プロファイル（整合性・桁数）を絶対優先
                         p_score = get_profile_similarity(p_curr, p_master)
                         total_score = p_score - abs(i - (m_idx - 1)) * 0.05
                     
@@ -673,7 +904,6 @@ def aggregate_only_task(files):
                     if val_str == "None": val_str = ""
                     aligned_row[m_idx] = val_str
             
-            # 元ファイル名以外のセルがすべて空文字なら、集約データに追加しない
             if any(v != "" for v in aligned_row[1:]):
                 aggregated_master_rows.append(aligned_row)
 
@@ -682,10 +912,8 @@ def aggregate_only_task(files):
         set_file_progress_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
         
         filename = os.path.basename(f)
-        for suffix in [f"_AI抽出.{out_format}", f"_Tesseract抽出.{out_format}"]:
-            if filename.endswith(suffix):
-                filename = filename.replace(suffix, ".pdf")
-                break
+        filename = re.sub(r'_Page_\d+(_AI抽出|_Tesseract抽出)\.' + out_format + '$', '.pdf', filename)
+        filename = re.sub(r'(_AI抽出|_Tesseract抽出)\.' + out_format + '$', '.pdf', filename)
                 
         try:
             if out_format == "xlsx":
@@ -765,12 +993,13 @@ def run_ai_extraction():
         safe_run(extract_tesseract_task)
 
 def extract_tesseract_task(files):
+    check_tesseract_installation()
+    
+    global selected_crop_regions
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
     out_format = output_format_var.get()
     total_files = len(files)
-    aggregated_all_rows = []
-    aggregated_all_texts = []
     
     for i, f in enumerate(files, 1):
         update_overall_progress(i, total_files, f"全体の進捗 ( {i} / {total_files} ファイル )")
@@ -778,92 +1007,155 @@ def extract_tesseract_task(files):
             save_dir = get_save_dir(f)
             if not save_dir: return
             base = os.path.splitext(os.path.basename(f))[0]
-            filename = os.path.basename(f)
             doc = fitz.open(f)
             total_pages = len(doc)
             digits = max(2, len(str(total_pages)))
-            
-            wb = Workbook() if out_format == "xlsx" else None
-            if wb: wb.remove(wb.active)
-            all_text_list = []
             
             for page_num in range(total_pages):
                 set_file_progress_indeterminate(f"Tesseractで解析中... ( {page_num+1} / {total_pages} ページ )")
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=300)
-                mode = "RGB" if pix.n == 3 else "L"
-                img = Image.frombytes(mode, [pix.width, pix.height], pix.samples).convert("RGB")
                 
-                try:
-                    text = pytesseract.image_to_string(img, lang="jpn+eng")
-                    if out_format == "xlsx":
-                        page_str = str(page_num+1).zfill(digits)
-                        ws = wb.create_sheet(f"Page_{page_str}")
-                        for row_idx, line in enumerate(text.split('\n'), 1):
-                            ws.cell(row=row_idx, column=1, value=line.strip())
-                            aggregated_all_rows.append([filename, line.strip()])
-                        auto_adjust_excel_column_width(ws)
-                    else:
-                        all_text_list.append(text)
-                        aggregated_all_texts.append(f"[{filename}] {text}")
-                except Exception as e:
-                    err_msg = f"[ --- ページ {page_num+1} 解析失敗 --- ]\nTesseract OCRエラー\n詳細: {e}"
-                    if out_format == "xlsx":
-                        page_str = str(page_num+1).zfill(digits)
-                        ws = wb.create_sheet(f"Page_{page_str}")
-                        ws.cell(row=1, column=1, value=err_msg)
-                        auto_adjust_excel_column_width(ws)
-                    else:
-                        all_text_list.append(err_msg)
+                img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+                if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+                elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+                
+                cropped_images = []
+                is_cropped = bool(selected_crop_regions)
+                if is_cropped:
+                    h, w = img_array.shape[:2]
+                    for (rx1, ry1, rx2, ry2) in selected_crop_regions:
+                        x1, y1 = int(rx1 * w), int(ry1 * h)
+                        x2, y2 = int(rx2 * w), int(ry2 * h)
+                        x1, x2 = min(x1, x2), max(x1, x2)
+                        y1, y2 = min(y1, y2), max(y1, y2)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            cropped_images.append(img_array[y1:y2, x1:x2])
+                else:
+                    cropped_images.append(img_array)
+                    
+                all_regions_data = []
+                for crop_img in cropped_images:
+                    img = Image.fromarray(crop_img)
+                    try:
+                        text = pytesseract.image_to_string(img, lang="jpn+eng")
+                        lines = [line.strip() for line in text.split('\n') if line.strip()]
+                        
+                        region_data = []
+                        if lines:
+                            h, w = crop_img.shape[:2]
+                            if (is_cropped and h > w * 1.5) or (len(lines) > 1 and all(len(l) <= 2 for l in lines)):
+                                region_data = [["".join(lines)]]
+                            else:
+                                region_data = [[l] for l in lines]
+                        
+                        if not region_data:
+                            region_data = [[""]]
+                            
+                        all_regions_data.append(region_data)
+                    except Exception as e:
+                        raise Exception(f"Tesseract OCR実行中にエラーが発生しました。\n{e}")
+                        
+                merged_data = merge_2d_arrays_horizontally(all_regions_data)
+                
+                final_data = []
+                page_info_str = f"{page_num+1}/{total_pages}"
+                
+                if selected_crop_regions:
+                    header = ["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(len(cropped_images))]
+                    final_data.append(header)
+                    for row in merged_data:
+                        final_data.append([page_info_str] + row)
+                else:
+                    final_data.append(["ページ番号", "抽出テキスト"])
+                    for row in merged_data:
+                        final_data.append([page_info_str] + row)
+                
+                page_str = str(page_num+1).zfill(digits)
+                save_path_base = os.path.join(save_dir, f"{base}_Page_{page_str}_Tesseract抽出")
+                
+                if out_format == "xlsx":
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = f"Page_{page_str}"
+                    for r_idx, row_data in enumerate(final_data, 1):
+                        for c_idx, val in enumerate(row_data, 1):
+                            ws.cell(row=r_idx, column=c_idx, value=str(val))
+                    auto_adjust_excel_column_width(ws)
+                    wb.save(f"{save_path_base}.xlsx")
+                elif out_format == "csv":
+                    with open(f"{save_path_base}.csv", "w", encoding="utf-8-sig", newline="") as f_out:
+                        writer = csv.writer(f_out)
+                        writer.writerows(final_data)
+                elif out_format == "txt":
+                    with open(f"{save_path_base}.txt", "w", encoding="utf-8") as f_out:
+                        for row_data in final_data:
+                            f_out.write("\t".join(row_data) + "\n")
             
             doc.close()
             gc.collect()
             set_file_progress_determinate(total_pages, total_pages, "ファイルを保存中...")
-            
-            if out_format == "xlsx":
-                wb.save(os.path.join(save_dir, f"{base}_Tesseract抽出.xlsx"))
-            elif out_format == "csv":
-                with open(os.path.join(save_dir, f"{base}_Tesseract抽出.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
-                    f_out.write("\n\n".join(all_text_list))
-            elif out_format == "txt":
-                with open(os.path.join(save_dir, f"{base}_Tesseract抽出.txt"), "w", encoding="utf-8") as f_out:
-                    f_out.write("\n\n".join(all_text_list))
 
         except Exception as e:
             print(f"Tesseract Error: {e}")
             raise e
 
 def extract_gemini_task(files):
+    global selected_crop_regions
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
     key = api_key_var.get().strip()
     genai.configure(api_key=key)
     models_to_try = get_available_models(key)
     out_format = output_format_var.get()
+    is_cropped = bool(selected_crop_regions)
 
     if out_format in ["csv", "xlsx"]:
-        prompt = """
-        あなたは優秀なデータ入力オペレーターです。添付された図面管理台帳などの表画像を読み取り、正確なJSONデータを作成してください。
-        
-        【データの分離精度を最優先する特別ルール（超重要）】
-        - データの見た目や文脈の意味よりも、「表の縦の罫線」や「文字列間の大きな空白」などの【物理的な列の区切り】を絶対的な基準として最優先し、物理的に分かれているデータは必ず別の要素として分割してください。
-        - 意味的に繋がっているように見えても、罫線や空白で区切られていれば絶対に1つの要素に結合しないでください。
-        - データが存在しない「空白セル」の場合は無視せず、必ず `""` (空文字) を該当位置に挿入し、列の位置を厳密に揃えてください。
-        - 1行のデータを丸ごと1つの文字列に繋げて出力することは絶対に禁止します。必ず各セルごとにリスト内で分割してください。
+        if is_cropped:
+            prompt = """
+            あなたは優秀なデータ入力オペレーターです。添付された画像のテキストを読み取り、行ごとに分割したJSONデータを作成してください。
+            
+            【特別ルール（絶対厳守）】
+            - 1つの画像（領域）につき、出力は「1つの列」にまとめます。列の分割（セル分け）は絶対にしないでください。
+            - 1行分のデータは、空白などで区切られていても分割せず、すべて1つの文字列としてまとめてください。
+            - 縦書きのテキスト（文字が縦に並んでいるもの）は、1文字ずつ分割したり改行したりせず、必ず繋げて横書きの1つの文字列に変換してください。
 
-        【出力形式（絶対厳守）】
-        シンプルな配列（リスト）で出力してください。
-        {
-          "header": ["列1名", "列2名", "列3名", ...],
-          "rows": [
-            ["データ1", "データ2", "", "データ4", ...],
-            ["データ1", "データ2", "データ3", "", ...]
-          ]
-        }
-        """
+            【出力形式（絶対厳守）】
+            以下のようなシンプルな配列（1次元リスト）の形式で出力してください。
+            {
+              "rows": [
+                "1行目の全テキスト...",
+                "2行目の全テキスト...",
+                "3行目の全テキスト..."
+              ]
+            }
+            """
+        else:
+            prompt = """
+            あなたは優秀なデータ入力オペレーターです。添付された図面管理台帳などの表画像を読み取り、正確なJSONデータを作成してください。
+            
+            【データの分離精度を最優先する特別ルール（超重要）】
+            - データの見た目や文脈の意味よりも、「表の縦の罫線」や「文字列間の大きな空白」などの【物理的な列の区切り】を絶対的な基準として最優先し、物理的に分かれているデータは必ず別の要素として分割してください。
+            - 意味的に繋がっているように見えても、罫線や空白で区切られていれば絶対に1つの要素に結合しないでください。
+            - データが存在しない「空白セル」の場合は無視せず、必ず `""` (空文字) を該当位置に挿入し、列の位置を厳密に揃えてください。
+            - 1行のデータを丸ごと1つの文字列に繋げて出力することは絶対に禁止します。必ず各セルごとにリスト内で分割してください。
+            - 縦書きのテキスト（文字が縦に並んでいるもの）は、1文字ずつ分割したり複数行に分けたりせず、必ず繋げて横書きの1つの文字列に変換して出力してください。
+
+            【出力形式（絶対厳守）】
+            シンプルな配列（リスト）で出力してください。
+            {
+              "header": ["列1名", "列2名", "列3名", ...],
+              "rows": [
+                ["データ1", "データ2", "", "データ4", ...],
+                ["データ1", "データ2", "データ3", "", ...]
+              ]
+            }
+            """
         generation_config = {"response_mime_type": "application/json"}
     else:
-        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。"
+        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
         generation_config = None
 
     total_files = len(files)
@@ -879,14 +1171,7 @@ def extract_gemini_task(files):
             total_pages = len(doc)
             digits = max(2, len(str(total_pages)))
             
-            wb = Workbook() if out_format == "xlsx" else None
-            if wb: wb.remove(wb.active)
-            all_text_list = []
-            
             for page_num in range(total_pages):
-                set_file_progress_determinate(0, 100, f"AIが画像を補正中... ( {page_num+1} / {total_pages} ページ )")
-                ws = wb.create_sheet(f"Page_{str(page_num+1).zfill(digits)}") if wb else None
-                
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=300)
                 img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
@@ -894,117 +1179,184 @@ def extract_gemini_task(files):
                 if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
                 elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 
-                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-                blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-                binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5)
-                clean_bg = np.where(binary == 255, 255, gray)
-                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                enhanced = clahe.apply(clean_bg.astype(np.uint8))
-                blur_for_sharp = cv2.GaussianBlur(enhanced, (0, 0), 2)
-                sharp = cv2.addWeighted(enhanced, 1.5, blur_for_sharp, -0.5, 0)
-                img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
-                
-                max_retries = 3
-                extracted_text, success, last_error, used_model = "", False, "", ""
-
-                for attempt in range(max_retries):
-                    for model_name in models_to_try:
-                        set_file_progress_indeterminate(f"AIが物理的な列構造を解析中... ( {page_num+1} / {total_pages} ページ )")
-                        try:
-                            model = genai.GenerativeModel(model_name)
-                            if generation_config:
-                                response = model.generate_content([prompt, img], generation_config=generation_config)
-                            else:
-                                response = model.generate_content([prompt, img])
-                            
-                            if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
-                            extracted_text = response.text.strip()
-                            success, used_model = True, model_name
-                            break
-                        except Exception as api_err:
-                            last_error = str(api_err)
-                            continue
-                    if success: break
-                    time.sleep(2 ** attempt)
-
-                if success:
-                    set_file_progress_determinate(100, 100, f"解析成功！ [モデル: {used_model}]")
-                    
-                    if out_format in ["xlsx", "csv"]:
-                        try:
-                            data = json.loads(extracted_text)
-                            
-                            header = data.get("header", [])
-                            rows = data.get("rows", [])
-                            
-                            if not header and not rows and isinstance(data, list):
-                                if data:
-                                    header = data[0] if isinstance(data[0], list) else [str(data[0])]
-                                    rows = data[1:]
-                            
-                            safe_header = [str(x).strip() for x in header] if isinstance(header, list) else []
-                            
-                            page_col_count = len(safe_header)
-                            for r in rows:
-                                if isinstance(r, list) and len(r) > page_col_count:
-                                    page_col_count = len(r)
-                                    
-                            if not safe_header:
-                                safe_header = [f"列{idx+1}" for idx in range(page_col_count)]
-
-                            page_data_to_write = []
-                            padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
-                            page_data_to_write.append(padded_header)
-                            
-                            for row_data in rows:
-                                parsed_r = parse_row_data(row_data)
-                                safe_row_local = (parsed_r + [""] * page_col_count)[:page_col_count]
-                                if any(v != "" for v in safe_row_local):
-                                    page_data_to_write.append(safe_row_local)
-
-                            if out_format == "xlsx":
-                                for row_idx, r_data in enumerate(page_data_to_write, 1):
-                                    for col_idx, val in enumerate(r_data, 1):
-                                        val_str = val if val != "None" else ""
-                                        ws.cell(row=row_idx, column=col_idx, value=val_str)
-                                auto_adjust_excel_column_width(ws)
-                            else: # csv
-                                csv_lines = []
-                                for r_data in page_data_to_write:
-                                    clean_row = [v if v != "None" else "" for v in r_data]
-                                    # Python 3.11以下の構文エラーを防ぐため .format() を使用して修正
-                                    csv_lines.append(",".join('"{}"'.format(val.replace('"', '""')) if ',' in val or '"' in val else val for val in clean_row))
-                                all_text_list.append("\n".join(csv_lines))
-
-                        except json.JSONDecodeError as e:
-                            err_msg = f"[ --- ページ {page_num+1} の解析結果が不正です --- ]\n詳細: {e}\n出力:\n{extracted_text}"
-                            if out_format == "xlsx":
-                                ws.cell(row=1, column=1, value=err_msg)
-                                auto_adjust_excel_column_width(ws)
-                            else:
-                                all_text_list.append(err_msg)
-                    else: # txt
-                        all_text_list.append(extracted_text)
+                cropped_images = []
+                if is_cropped:
+                    h, w = img_array.shape[:2]
+                    for (rx1, ry1, rx2, ry2) in selected_crop_regions:
+                        x1, y1 = int(rx1 * w), int(ry1 * h)
+                        x2, y2 = int(rx2 * w), int(ry2 * h)
+                        x1, x2 = min(x1, x2), max(x1, x2)
+                        y1, y2 = min(y1, y2), max(y1, y2)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w, x2), min(h, y2)
+                        if x2 > x1 and y2 > y1:
+                            cropped_images.append(img_array[y1:y2, x1:x2])
                 else:
-                    err_msg = f"[ --- ページ {page_num+1} の解析に失敗しました --- ]\nエラー詳細: {last_error}"
-                    if out_format == "xlsx":
-                        ws.cell(row=1, column=1, value=err_msg)
-                        auto_adjust_excel_column_width(ws)
+                    cropped_images.append(img_array)
+                    
+                num_regions = len(cropped_images)
+                all_regions_data = []
+
+                # APIのレートリミット(429エラー)によるリトライ遅延を回避するため、
+                # 安定性の高い直列処理を基本とし、クールダウン(待機)を設ける設計を採用
+                for region_idx, crop_img_array in enumerate(cropped_images):
+                    gray = cv2.cvtColor(crop_img_array, cv2.COLOR_RGB2GRAY)
+                    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+                    binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5)
+                    clean_bg = np.where(binary == 255, 255, gray)
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    enhanced = clahe.apply(clean_bg.astype(np.uint8))
+                    blur_for_sharp = cv2.GaussianBlur(enhanced, (0, 0), 2)
+                    sharp = cv2.addWeighted(enhanced, 1.5, blur_for_sharp, -0.5, 0)
+                    img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
+                    
+                    max_retries = 4
+                    extracted_text, success, last_error = "", False, ""
+
+                    for attempt in range(max_retries):
+                        for model_name in models_to_try:
+                            set_file_progress_indeterminate(f"AI解析中... ( {page_num+1}/{total_pages}頁 | 領域 {region_idx+1}/{num_regions} )")
+                            try:
+                                model = genai.GenerativeModel(model_name)
+                                if generation_config:
+                                    response = model.generate_content([prompt, img], generation_config=generation_config)
+                                else:
+                                    response = model.generate_content([prompt, img])
+                                
+                                if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
+                                extracted_text = response.text.strip()
+                                success = True
+                                break
+                            except Exception as api_err:
+                                last_error = str(api_err)
+                                continue
+                        
+                        if success: break
+                        # 指数的バックオフ + Jitter(揺らぎ) でリトライ時の衝突とAPI制限を回避
+                        sleep_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                        time.sleep(sleep_time)
+
+                    if success:
+                        # 成功した場合、無料枠のレートリミット(通常15 RPM = 4秒に1回)を考慮して安全なクールダウンを挟む
+                        time.sleep(4.0)
+
+                        if out_format in ["xlsx", "csv"]:
+                            try:
+                                data = json.loads(extracted_text)
+                                
+                                if is_cropped:
+                                    rows = data.get("rows", [])
+                                    if not rows and isinstance(data, list):
+                                        rows = data
+                                        
+                                    page_data_to_write = []
+                                    h_crop, w_crop = crop_img_array.shape[:2]
+                                    clean_rows = []
+                                    
+                                    for r in rows:
+                                        val = " ".join([str(x) for x in r]) if isinstance(r, list) else str(r)
+                                        if '\n' in val:
+                                            lines = [l.strip() for l in val.split('\n') if l.strip()]
+                                            if all(len(l) <= 2 for l in lines):
+                                                val = "".join(lines)
+                                        clean_rows.append(val)
+                                        
+                                    if h_crop > w_crop * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()):
+                                        page_data_to_write.append(["".join(clean_rows)])
+                                    else:
+                                        for val in clean_rows:
+                                            page_data_to_write.append([val])
+                                            
+                                    all_regions_data.append(page_data_to_write)
+                                else:
+                                    header = data.get("header", [])
+                                    rows = data.get("rows", [])
+                                    if not header and not rows and isinstance(data, list):
+                                        if data:
+                                            header = data[0] if isinstance(data[0], list) else [str(data[0])]
+                                            rows = data[1:]
+                                    
+                                    safe_header = [str(x).strip() for x in header] if isinstance(header, list) else []
+                                    page_col_count = len(safe_header)
+                                    for r in rows:
+                                        if isinstance(r, list) and len(r) > page_col_count:
+                                            page_col_count = len(r)
+                                            
+                                    if not safe_header:
+                                        safe_header = [f"列{idx+1}" for idx in range(page_col_count)]
+
+                                    page_data_to_write = []
+                                    padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
+                                    page_data_to_write.append(padded_header)
+                                    
+                                    for row_data in rows:
+                                        parsed_r = parse_row_data(row_data)
+                                        safe_row_local = []
+                                        for val in (parsed_r + [""] * page_col_count)[:page_col_count]:
+                                            v_str = str(val)
+                                            if '\n' in v_str:
+                                                lines = [l.strip() for l in v_str.split('\n') if l.strip()]
+                                                if len(lines) > 1 and all(len(l) <= 2 for l in lines):
+                                                    v_str = "".join(lines)
+                                            safe_row_local.append(v_str)
+                                            
+                                        if any(v != "" for v in safe_row_local):
+                                            page_data_to_write.append(safe_row_local)
+                                            
+                                    all_regions_data.append(page_data_to_write)
+
+                            except json.JSONDecodeError as e:
+                                all_regions_data.append([[f"JSONパースエラー: {e}"]])
+                        else:
+                            all_regions_data.append([[line] for line in extracted_text.split('\n')])
                     else:
-                        all_text_list.append(err_msg)
+                        all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
+                
+                merged_data = merge_2d_arrays_horizontally(all_regions_data)
+                
+                final_data = []
+                page_info_str = f"{page_num+1}/{total_pages}"
+                
+                if is_cropped:
+                    header = ["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(num_regions)]
+                    final_data.append(header)
+                    for row in merged_data:
+                        final_data.append([page_info_str] + row)
+                else:
+                    if out_format in ["xlsx", "csv"]:
+                        for r_idx, row in enumerate(merged_data):
+                            if r_idx == 0:
+                                final_data.append(["ページ番号"] + row)
+                            else:
+                                final_data.append([page_info_str] + row)
+                    else:
+                        for row in merged_data:
+                            final_data.append([page_info_str] + row)
+                
+                page_str = str(page_num+1).zfill(digits)
+                save_path_base = os.path.join(save_dir, f"{base}_Page_{page_str}_AI抽出")
+                
+                if out_format == "xlsx":
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = f"Page_{page_str}"
+                    for r_idx, row_data in enumerate(final_data, 1):
+                        for c_idx, val in enumerate(row_data, 1):
+                            ws.cell(row=r_idx, column=c_idx, value=str(val))
+                    auto_adjust_excel_column_width(ws)
+                    wb.save(f"{save_path_base}.xlsx")
+                elif out_format == "csv":
+                    with open(f"{save_path_base}.csv", "w", encoding="utf-8-sig", newline="") as f_out:
+                        writer = csv.writer(f_out)
+                        writer.writerows(final_data)
+                elif out_format == "txt":
+                    with open(f"{save_path_base}.txt", "w", encoding="utf-8") as f_out:
+                        for row_data in final_data:
+                            f_out.write("\t".join(row_data) + "\n")
             
             doc.close()
             gc.collect()
-            set_file_progress_determinate(total_pages, total_pages, "ファイルを保存中...")
-            
-            if out_format == "xlsx":
-                wb.save(os.path.join(save_dir, f"{base}_AI抽出.xlsx"))
-            elif out_format == "csv":
-                with open(os.path.join(save_dir, f"{base}_AI抽出.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
-                    f_out.write("\n\n".join(all_text_list))
-            elif out_format == "txt":
-                with open(os.path.join(save_dir, f"{base}_AI抽出.txt"), "w", encoding="utf-8") as f_out:
-                    f_out.write("\n\n".join(all_text_list))
+            set_file_progress_determinate(total_pages, total_pages, "完了")
                 
         except Exception as e:
             print(f"AI Task Error: {e}")
@@ -1123,6 +1475,7 @@ def convert_to_dxf(files):
 # UI構築 (モダン＆洗練化)
 # ==============================
 def update_ui():
+    global selected_crop_regions
     path_text = "\n".join(selected_files) if current_mode == "file" else (f"フォルダ: {selected_folder}" if selected_folder else "未選択")
     path_label.config(text=path_text)
     is_active = current_mode is not None
@@ -1131,6 +1484,15 @@ def update_ui():
     for b in [btn_split, btn_rotate, btn_text, btn_excel, btn_jpeg, btn_png, btn_dxf, btn_ai_extract, btn_aggregate]:
         b.config(state=state_val)
     btn_merge.config(state=tk.NORMAL if current_mode=="folder" else tk.DISABLED)
+    
+    if is_active:
+        btn_select_crop.config(state=tk.NORMAL)
+        btn_reset_crop.config(state=tk.NORMAL)
+    else:
+        btn_select_crop.config(state=tk.DISABLED)
+        btn_reset_crop.config(state=tk.DISABLED)
+        selected_crop_regions = []
+        btn_select_crop.config(text="抽出範囲を選択")
 
 def toggle_api_key_entry(*args):
     if ai_engine_var.get() == "Gemini":
@@ -1159,7 +1521,6 @@ style.map("TButton", background=[("active", "#DEE2E6")])
 style.configure("Primary.TButton", background=PRIMARY, foreground="white", borderwidth=0)
 style.map("Primary.TButton", background=[("active", PRIMARY_HOVER)])
 
-# 機能ごとのカラー設定
 COLOR_SUCCESS = "#198754"
 COLOR_SUCCESS_HOVER = "#157347"
 COLOR_INFO = "#0DCAF0"
@@ -1212,7 +1573,7 @@ title_frame = ttk.Frame(main_container)
 title_frame.pack(fill=tk.X, pady=(0, 15))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
-ttk.Label(main_container, text="✨ Update: タプル文字列化バグを修正し、数値整合性のみで列を自動マッピングします。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
+ttk.Label(main_container, text="✨ Update: 抽出ボタン表記の改善と、通信の最適化(安定化)を行いました。", font=("Meiryo UI", 9), foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 20))
 
 # ファイル選択カード
 file_card = ttk.Frame(main_container, style="Card.TFrame", padding=15)
@@ -1225,7 +1586,7 @@ ttk.Button(btn_frame, text="📁 フォルダを選択", command=select_folder, 
 path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=TEXT_COLOR, wraplength=580, justify="center")
 path_label.pack(pady=(12, 0))
 
-# 設定グリッド (保存先 & 回転)
+# 設定グリッド
 settings_grid = ttk.Frame(main_container)
 settings_grid.pack(fill=tk.X, pady=15)
 settings_grid.columnconfigure(0, weight=1)
@@ -1267,6 +1628,14 @@ format_frame.pack(fill=tk.X, pady=5)
 ttk.Label(format_frame, text="出力形式:", width=10, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 for fmt in ["xlsx", "csv", "txt"]:
     ttk.Radiobutton(format_frame, text=f".{fmt}", variable=output_format_var, value=fmt).pack(side=tk.LEFT, padx=5)
+
+crop_frame = ttk.Frame(ai_frame, style="Card.TFrame")
+crop_frame.pack(fill=tk.X, pady=(5, 0))
+ttk.Label(crop_frame, text="抽出範囲:", width=10, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+btn_select_crop = ttk.Button(crop_frame, text="抽出範囲を選択", command=open_crop_selector, state=tk.DISABLED)
+btn_select_crop.pack(side=tk.LEFT)
+btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, state=tk.DISABLED, style="Warning.TButton")
+btn_reset_crop.pack(side=tk.LEFT, padx=(5, 0))
 
 ai_engine_var.trace("w", toggle_api_key_entry)
 
