@@ -102,7 +102,6 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                 for table in tables:
                     for row_data in table:
                         for col_idx, cell_value in enumerate(row_data, 1):
-                            # サニタイズ関数を通してから書き込み
                             clean_value = sanitize_excel_text(cell_value)
                             cell = ws.cell(row=current_row, column=col_idx, value=clean_value if clean_value else "")
                             cell.border = Border(left=border_style, right=border_style, top=border_style, bottom=border_style)
@@ -138,6 +137,9 @@ def convert_to_csv_internal(files, save_dir, options, ui):
 
 def convert_to_image_jpg(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "jpg")
 def convert_to_image_png(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "png")
+def convert_to_image_tiff(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "tiff")
+def convert_to_image_bmp(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "bmp")
+
 def _convert_image(files, save_dir, options, ui, ext):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
@@ -160,7 +162,38 @@ def _convert_image(files, save_dir, options, ui, ext):
                     x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
                     x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
                     Image.fromarray(img_array[y1:y2, x1:x2]).save(os.path.join(save_dir, f"{base}_{n_str}_crop{idx+1}.{ext}"))
-            else: pix.save(os.path.join(save_dir, f"{base}_{n_str}.{ext}"))
+            else: 
+                # PNG, JPG 以外は PIL を経由して保存
+                if ext in ["tiff", "bmp"]:
+                    Image.frombytes("RGB" if pix.n >= 3 else "L", [pix.width, pix.height], pix.samples).save(os.path.join(save_dir, f"{base}_{n_str}.{ext}"))
+                else:
+                    pix.save(os.path.join(save_dir, f"{base}_{n_str}.{ext}"))
+
+def convert_to_svg(files, save_dir, options, ui):
+    files = [f for f in files if f.lower().endswith(".pdf")]
+    if not files: raise Exception("PDFファイルが含まれていません。")
+    crop_regions = options.get("crop_regions", [])
+    for i, f in enumerate(files, 1):
+        ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
+        doc = fitz.open(f)
+        base = os.path.splitext(os.path.basename(f))[0]
+        digits = max(2, len(str(len(doc))))
+        for n, page in enumerate(doc, 1):
+            ui.set_determinate(n, len(doc), f"SVGへ変換中... ( {n} / {len(doc)} ページ )")
+            n_str = str(n).zfill(digits)
+            if crop_regions:
+                h, w = page.rect.height, page.rect.width
+                for idx, (rx1, ry1, rx2, ry2) in enumerate(crop_regions):
+                    rect = fitz.Rect(min(rx1, rx2)*w, min(ry1, ry2)*h, max(rx1, rx2)*w, max(ry1, ry2)*h)
+                    page.set_cropbox(rect)
+                    svg_xml = page.get_svg_image()
+                    with open(os.path.join(save_dir, f"{base}_{n_str}_crop{idx+1}.svg"), "w", encoding="utf-8") as svg_file:
+                        svg_file.write(svg_xml)
+                    page.set_cropbox(page.mediabox) # 元に戻す
+            else:
+                svg_xml = page.get_svg_image()
+                with open(os.path.join(save_dir, f"{base}_{n_str}.svg"), "w", encoding="utf-8") as svg_file:
+                    svg_file.write(svg_xml)
 
 def convert_to_dxf(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]

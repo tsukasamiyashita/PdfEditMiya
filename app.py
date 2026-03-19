@@ -10,7 +10,8 @@ import google.generativeai as genai
 from pdf_engine import (
     merge_pdfs, split_pdfs, rotate_pdfs,
     extract_text_internal, convert_to_excel_internal, convert_to_csv_internal,
-    convert_to_image_jpg, convert_to_image_png, convert_to_dxf
+    convert_to_image_jpg, convert_to_image_png, convert_to_dxf,
+    convert_to_image_tiff, convert_to_image_bmp, convert_to_svg
 )
 from ai_engine import (
     extract_tesseract_task, extract_gemini_task, aggregate_only_task
@@ -19,8 +20,8 @@ from ai_engine import (
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.0.0"
-WINDOW_WIDTH, WINDOW_HEIGHT = 700, 820
+APP_TITLE, VERSION = "PdfEditMiya", "v1.12.0"
+WINDOW_WIDTH, WINDOW_HEIGHT = 700, 840
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -35,7 +36,74 @@ COLOR_PURPLE, COLOR_PURPLE_HOVER = "#6F42C1", "#59339D"
 
 USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
-AI_HELP_TEXT = "【 AI抽出機能の使い方と準備 】\nPDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキストデータとして抽出する機能です。\n用途に合わせてGemini APIかTesseractをご利用ください。"
+
+# ==============================
+# ヘルプ・履歴テキスト
+# ==============================
+VERSION_HISTORY = """
+[ v1.12.0 ]
+- 【アーキテクチャ刷新】機能ごとにモジュールを分割し、今後の拡張性を大幅に向上させました。
+- 【フォーマット追加】Word(.docx)、JSON、Markdown、SVG、TIFF、BMPでの抽出・変換に新しく対応しました。
+- 【データ集約の強化】指定したフォルダ内の無関係なファイルも含め、同一フォーマットのファイルをすべて集約対象とするように変更。
+- 【レイアウト保持】データ集約時に、元の表のレイアウト（列の順序）が階段状にズレないよう絶対ルールを追加。
+- 【UI改善】プレビュー画面を開いた際に自動で最大化表示されるよう変更し、マウスホイール等での操作性を向上。
+
+[ v1.11.0 ]
+- 【安定化】APIの接続制限による遅延を回避するため、Gemini複数領域抽出の通信を安定した直列処理へ戻しました。
+- 【安定化強化】Gemini APIのレートリミット(429エラー)対策として、リクエスト間の自動クールダウン(待機)と、Jitter(揺らぎ)を伴う再試行ロジックを実装。大量ページの連続処理時の安定性が劇的に向上しました。
+- 【UI改善】抽出範囲ボタンの表記をシンプルにし、「全体に戻す」リセットボタンを追加しました。
+
+[ v1.10.0 系 ]
+- 【レイアウト固定】アプリ起動時のウィンドウ表示位置を画面左上に固定。
+- 【スマートカラムマッピング】数値・分数の割合と桁数の整合性による自動列マッピング。
+- 【列の分割と1列化】複数領域を指定した場合、1つの領域＝1つの列として横並びで出力する機能。
+- 【ページごとの独立ファイル】複数ページPDFの処理時、1ページごとに個別のファイルとして出力。
+- 【ページ番号の自動付与】AI抽出データの先頭列に「現在のページ/総ページ数」を自動追加。
+- 【縦書き文字の自動結合】縦書きの文字が複数行に分割される問題を解消し、横書き1文に結合。
+- 【プレビュー拡大機能】抽出範囲のプレビュー画面に拡大・縮小ボタンとスクロールバーを追加。
+- 【集約順の適正化】データ集約時、ファイルの順番が「更新日時順」になるよう修正。
+"""
+
+AI_HELP_TEXT = """
+【 AI抽出機能の使い方と準備 】
+
+PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキスト・Word・JSON・Markdownデータとして抽出する機能です。
+用途に合わせて2つのAIエンジンを切り替えて使用できます。
+
+───────────────────────────
+■ Gemini API を使う場合（推奨・超高精度）
+───────────────────────────
+最新のAIモデルを利用し、かすれた文字や複雑な表の罫線を高精度に認識します。
+インターネット接続と、無料の「APIキー」が必要です。
+
+[APIキーの取得手順]
+1. ブラウザで以下のURLにアクセスします。
+   https://aistudio.google.com/app/apikey
+2. お持ちのGoogleアカウントでログインします。
+3. 画面左上の「Create API key」ボタンを押します。
+4. 「Create API key in new project」を選択します。
+5. 発行された長い英数字の文字列（APIキー）をコピーします。
+6. 本アプリの「APIキー」入力枠に貼り付け、「テスト」ボタンを押してください。
+
+───────────────────────────
+■ Tesseract を使う場合（オフライン・簡易抽出）
+───────────────────────────
+インターネットに繋がっていない環境でも使用できる、無料のOCRソフトです。
+
+[インストール手順]
+1. ブラウザで以下のURLにアクセスします。
+   https://github.com/UB-Mannheim/tesseract/wiki
+2. 「tesseract-ocr-w64-setup...exe」など、最新の64bit版インストーラーをダウンロードして実行します。
+3. インストール中の「Choose Components」画面で、「Additional language data (download)」の中にある「Japanese」および「Japanese (vertical)」に必ずチェックを入れてください。
+4. インストール先は初期設定のまま（C:\\Program Files\\Tesseract-OCR）進めてください。
+
+───────────────────────────
+■ 抽出範囲の選択機能について
+───────────────────────────
+・「抽出範囲を選択」ボタンから、読み取ってほしい表の部分だけをドラッグして囲むことができます。
+・複数の範囲を囲んだ場合、それぞれの範囲のデータが「列」として横に並んで出力されます。
+・全体を抽出したい状態に戻すときは「全体に戻す」ボタンを押してください。
+"""
 
 # ==============================
 # グローバル状態
@@ -70,6 +138,11 @@ class UIController:
                 file_progress["value"] = step
                 if text: file_label.config(text=text)
         root.after(0, _task)
+
+def resource_path(relative_path):
+    try: base_path = sys._MEIPASS
+    except Exception: base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 def get_api_key():
     if os.path.exists(API_KEY_FILE):
@@ -118,13 +191,13 @@ def close_processing():
 def run_task(func):
     global cancelled; cancelled = False
     try:
-        files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt"))] if selected_folder else [])
+        files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
         if not files: return
         save_dir = os.path.dirname(files[0]) if save_option.get() == 1 else preset_save_dir
         options = {
             "rotate_deg": rotate_option.get(), "crop_regions": selected_crop_regions, "out_format": output_format_var.get(),
             "folder_name": os.path.basename(selected_folder) if selected_folder else "Merged",
-            "api_key": api_key_var.get().strip(), "models_to_try": ['gemini-1.5-pro', 'gemini-1.5-flash'] if engine_var.get() == "Gemini" else []
+            "api_key": api_key_var.get().strip()
         }
         func(files, save_dir, options, UIController())
         close_processing()
@@ -133,7 +206,7 @@ def run_task(func):
         print(f"Error: {e}"); close_processing(); show_message(f"❌ エラーが発生しました\n{str(e)[:40]}...", ERROR)
 
 def safe_run(func):
-    files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt"))] if selected_folder else [])
+    files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
     if not files: return
     global preset_save_dir
     if save_option.get() == 2 and not preset_save_dir:
@@ -145,13 +218,20 @@ def safe_run(func):
 
 def run_selected_extraction():
     engine = engine_var.get(); fmt = output_format_var.get()
+    
     if fmt == "jpg": safe_run(convert_to_image_jpg)
     elif fmt == "png": safe_run(convert_to_image_png)
+    elif fmt == "tiff": safe_run(convert_to_image_tiff)
+    elif fmt == "bmp": safe_run(convert_to_image_bmp)
+    elif fmt == "svg": safe_run(convert_to_svg)
     elif fmt == "dxf": safe_run(convert_to_dxf)
     elif engine == "Internal":
         if fmt == "txt": safe_run(extract_text_internal)
         elif fmt == "xlsx": safe_run(convert_to_excel_internal)
         elif fmt == "csv": safe_run(convert_to_csv_internal)
+        elif fmt in ["json", "md", "docx"]: 
+            messagebox.showinfo("情報", "標準ライブラリ（Internal）はJSON / Markdown / Word出力に未対応です。\nExcelやCSV、またはAIエンジンを使用してください。")
+            return
     elif engine == "Tesseract": safe_run(extract_tesseract_task)
     elif engine == "Gemini":
         if not api_key_var.get().strip(): return messagebox.showerror("エラー", "Gemini APIキーを入力してください。")
@@ -159,35 +239,68 @@ def run_selected_extraction():
 
 class CropSelector:
     def __init__(self, master, pdf_path):
-        self.top = tk.Toplevel(master); self.top.title("抽出範囲の選択 (複数選択可)"); self.top.configure(bg=BG_COLOR); self.top.transient(master); self.top.grab_set()
-        self.pdf_path = pdf_path; self.zoom = 1.0
-        btn_frame = ttk.Frame(self.top, padding=10); btn_frame.pack(fill=tk.X)
+        self.top = tk.Toplevel(master)
+        self.top.title("抽出範囲の選択 (複数選択可)")
+        self.top.configure(bg=BG_COLOR)
+        self.top.grab_set()
+
+        self.pdf_path = pdf_path
+        self.zoom = 1.0
+        
+        btn_frame = ttk.Frame(self.top, padding=10)
+        btn_frame.pack(fill=tk.X)
+        
         ttk.Button(btn_frame, text="クリア", command=self.clear_rects, style="Warning.TButton").pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="設定して閉じる", command=self.save_and_close, style="Primary.TButton").pack(side=tk.RIGHT, padx=5)
-        zoom_frame = ttk.Frame(btn_frame); zoom_frame.pack(side=tk.RIGHT, padx=20)
+        
+        zoom_frame = ttk.Frame(btn_frame)
+        zoom_frame.pack(side=tk.RIGHT, padx=20)
         ttk.Button(zoom_frame, text="拡大 (+)", command=self.zoom_in, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(zoom_frame, text="縮小 (-)", command=self.zoom_out, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(zoom_frame, text="フィット", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Label(btn_frame, text="【使い方】ドラッグで抽出範囲を囲みます。", foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
 
-        canvas_frame = ttk.Frame(self.top); canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        self.vbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL); self.vbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.hbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL); self.hbar.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(btn_frame, text="【使い方】ドラッグで範囲を選択。Ctrl+ホイール: 拡縮 / Shift+ホイール: 横スクロール", foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
+
+        canvas_frame = ttk.Frame(self.top)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+
+        self.vbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+        self.vbar.grid(row=0, column=1, sticky="ns")
+        self.hbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+        self.hbar.grid(row=1, column=0, sticky="ew")
+
         self.canvas = tk.Canvas(canvas_frame, cursor="cross", bg="white", xscrollcommand=self.hbar.set, yscrollcommand=self.vbar.set)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.vbar.config(command=self.canvas.yview); self.hbar.config(command=self.canvas.xview)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        self.vbar.config(command=self.canvas.yview)
+        self.hbar.config(command=self.canvas.xview)
 
         self.start_x, self.start_y, self.current_rect, self.rectangles = None, None, None, []
-        self.canvas.bind("<ButtonPress-1>", self.on_press); self.canvas.bind("<B1-Motion>", self.on_drag); self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        if sys.platform.startswith("win"): self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind("<ButtonPress-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+
+        if sys.platform.startswith("win"): 
+            self.canvas.bind("<MouseWheel>", self.on_mousewheel_y)
+            self.canvas.bind("<Shift-MouseWheel>", self.on_mousewheel_x)
+            self.canvas.bind("<Control-MouseWheel>", self.on_mousewheel_zoom)
 
         try:
-            self.doc = fitz.open(pdf_path); self.page = self.doc[0]; self.zoom_fit()
-        except Exception as e: self.top.destroy(); raise Exception(f"プレビュー生成失敗: {e}")
+            self.doc = fitz.open(pdf_path)
+            self.page = self.doc[0]
+            self.zoom_fit()
+        except Exception as e:
+            self.top.destroy()
+            raise Exception(f"プレビュー生成失敗: {e}")
 
         self.top.update_idletasks()
-        w, h = int(master.winfo_screenwidth() * 0.8), int(master.winfo_screenheight() * 0.8)
-        self.top.geometry(f"{w}x{h}+{(master.winfo_screenwidth()//2)-(w//2)}+{(master.winfo_screenheight()//2)-(h//2)}")
+        try:
+            self.top.state('zoomed')
+        except Exception:
+            w, h = master.winfo_screenwidth(), master.winfo_screenheight()
+            self.top.geometry(f"{w}x{h}+0+0")
 
     def draw_image(self):
         mat = fitz.Matrix(self.zoom, self.zoom); pix = self.page.get_pixmap(matrix=mat)
@@ -199,7 +312,13 @@ class CropSelector:
     def zoom_in(self): self.zoom = min(5.0, self.zoom * 1.2); self.draw_image()
     def zoom_out(self): self.zoom = max(0.2, self.zoom / 1.2); self.draw_image()
     def zoom_fit(self): self.zoom = min(2.0, (self.top.winfo_screenheight() * 0.7) / self.page.rect.height); self.draw_image()
-    def on_mousewheel(self, event): self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    
+    def on_mousewheel_y(self, event): self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    def on_mousewheel_x(self, event): self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+    def on_mousewheel_zoom(self, event):
+        if event.delta > 0: self.zoom_in()
+        else: self.zoom_out()
+        
     def on_press(self, event):
         self.start_x, self.start_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
         self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4))
@@ -220,7 +339,7 @@ class CropSelector:
         self.doc.close(); self.top.destroy()
 
 def open_crop_selector():
-    files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt"))] if selected_folder else [])
+    files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
     pdf_files = [f for f in files if f.lower().endswith('.pdf')]
     if not pdf_files: return messagebox.showinfo("情報", "PDFファイルが選択されていません。")
     try: CropSelector(root, pdf_files[0])
@@ -232,7 +351,7 @@ def reset_crop_regions():
 
 def select_files():
     global selected_files, selected_folder, current_mode
-    files = filedialog.askopenfilenames(filetypes=[("すべての対応ファイル", "*.pdf;*.xlsx;*.csv;*.txt"), ("PDF", "*.pdf")])
+    files = filedialog.askopenfilenames(filetypes=[("すべての対応ファイル", "*.pdf;*.xlsx;*.csv;*.txt;*.json;*.md;*.docx"), ("PDF", "*.pdf")])
     if files: selected_files, selected_folder, current_mode = list(files), "", "file"; update_ui()
 
 def select_folder():
@@ -274,6 +393,17 @@ def show_text_window(title, content):
     text_area = st.ScrolledText(win, wrap=tk.WORD, font=("Meiryo UI", 10), bg=CARD_BG, fg=TEXT_COLOR, relief=tk.FLAT, padx=15, pady=15)
     text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=10); text_area.insert(tk.END, content); text_area.configure(state=tk.DISABLED)
 
+def show_version_info(): 
+    messagebox.showinfo("バージョン情報", f"{APP_TITLE}\nバージョン: {VERSION}\n\nPython & Tkinter製 PDF編集ツール")
+
+def show_history(): 
+    show_text_window("バージョン履歴", VERSION_HISTORY.strip())
+
+def show_readme():
+    p = resource_path("README.md")
+    content = open(p, "r", encoding="utf-8").read() if os.path.exists(p) else "README.mdが見つかりません。\nアプリと同じフォルダに配置してください。"
+    show_text_window("Readme", content)
+
 # ==============================
 # UI画面の構築
 # ==============================
@@ -295,9 +425,16 @@ style.configure("Purple.TButton", background=COLOR_PURPLE, foreground="white", b
 style.map("Purple.TButton", background=[("active", COLOR_PURPLE_HOVER)])
 style.configure("TRadiobutton", background=CARD_BG, font=("Segoe UI", 10), foreground=TEXT_COLOR)
 
-menubar = Menu(root); help_menu = Menu(menubar, tearoff=0)
-help_menu.add_command(label="AI抽出の使い方", command=lambda: show_text_window("AI抽出の使い方", AI_HELP_TEXT.strip()))
-menubar.add_cascade(label="ヘルプ", menu=help_menu); root.config(menu=menubar)
+menubar = Menu(root)
+help_menu = Menu(menubar, tearoff=0)
+help_menu.add_command(label="AI抽出の準備 (使い方)", command=lambda: show_text_window("AI抽出の準備 (使い方)", AI_HELP_TEXT.strip()))
+help_menu.add_separator()
+help_menu.add_command(label="Readmeを表示", command=show_readme)
+help_menu.add_command(label="バージョン履歴", command=show_history)
+help_menu.add_separator()
+help_menu.add_command(label="バージョン情報", command=show_version_info)
+menubar.add_cascade(label="ヘルプ", menu=help_menu)
+root.config(menu=menubar)
 
 rotate_option, save_option = tk.IntVar(value=270), tk.IntVar(value=1)
 engine_var, output_format_var, api_key_var = tk.StringVar(value="Internal"), tk.StringVar(value="xlsx"), tk.StringVar(value=get_api_key() or "")
@@ -333,13 +470,20 @@ for text, val in [("Python標準ライブラリ (高速・オフライン)", "In
 
 format_frame = ttk.Frame(extract_frame, style="Card.TFrame"); format_frame.pack(fill=tk.X, pady=5)
 ttk.Label(format_frame, text="② 出力形式:", width=12, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
-formats = [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv"), ("Text (.txt)", "txt"), ("JPEG (.jpg)", "jpg"), ("PNG (.png)", "png"), ("DXF (.dxf)", "dxf")]
+
+formats_row1 = [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv"), ("Text (.txt)", "txt"), ("JSON (.json)", "json")]
+formats_row2 = [("Markdown (.md)", "md"), ("Word (.docx)", "docx"), ("JPEG (.jpg)", "jpg"), ("PNG (.png)", "png")]
+formats_row3 = [("SVG (.svg)", "svg"), ("TIFF (.tiff)", "tiff"), ("BMP (.bmp)", "bmp"), ("DXF (.dxf)", "dxf")]
+
 format_inner1 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner1.pack(anchor="w", fill=tk.X)
-for text, val in formats[:3]:
+for text, val in formats_row1:
     rb = ttk.Radiobutton(format_inner1, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
-format_inner2 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner2.pack(anchor="w", fill=tk.X, pady=(5, 0))
-for text, val in formats[3:]:
+format_inner2 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner2.pack(anchor="w", fill=tk.X, pady=(4, 0))
+for text, val in formats_row2:
     rb = ttk.Radiobutton(format_inner2, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
+format_inner3 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner3.pack(anchor="w", fill=tk.X, pady=(4, 0))
+for text, val in formats_row3:
+    rb = ttk.Radiobutton(format_inner3, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
 
 ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=8)
 

@@ -1,10 +1,1 @@
-opencv-python
-numpy
-PyPDF2
-pdfplumber
-openpyxl
-pymupdf
-ezdxf
-pytesseract
-Pillow
-google-generativeai>=0.5.2
+opencv-python numpy PyPDF2 pdfplumber openpyxl pymupdf ezdxf pytesseract Pillow google-generativeai>=0.5.2 python-docx

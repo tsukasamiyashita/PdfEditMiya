@@ -25,20 +25,20 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    # PyInstallerでexe化の実行 (PyQt6の不要なcollectを削除)
+    # PyInstallerでexe化の実行 (モジュール分割に対応)
     - name: Build with PyInstaller
       run: >
         pyinstaller 
         --onefile 
         --noconsole 
         --clean 
-        --name "PdfEditMiya-v1.11.0" 
+        --name "PdfEditMiya-v1.12.0" 
         --add-data "README.md;."
-        app.pyw
+        app.py
 
     # 完成したexeファイルをGitHub上にアップロード
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: PdfEditMiya-v1.11.0
-        path: dist/PdfEditMiya-v1.11.0.exe
+        name: PdfEditMiya-v1.12.0
+        path: dist/PdfEditMiya-v1.12.0.exe

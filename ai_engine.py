@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, sys, cv2, csv, time, json, random, gc, re
+import os, sys, cv2, csv, time, json, random, gc, re, ast
 import numpy as np
 import fitz
 import pytesseract
@@ -7,6 +7,12 @@ import openpyxl
 from openpyxl import Workbook
 from PIL import Image
 import google.generativeai as genai
+
+# Word対応用のライブラリ読み込み (インストールされていない場合のエラーハンドリング含む)
+try:
+    from docx import Document
+except ImportError:
+    Document = None
 
 from utils import (
     auto_adjust_excel_column_width,
@@ -88,51 +94,101 @@ def extract_tesseract_task(files, save_dir, options, ui):
             elif out_format == "txt":
                 with open(f"{save_path}.txt", "w", encoding="utf-8") as f_out:
                     for row_data in final_data: f_out.write("\t".join(row_data) + "\n")
+            elif out_format == "json":
+                with open(f"{save_path}.json", "w", encoding="utf-8") as f_out: json.dump(final_data, f_out, ensure_ascii=False, indent=2)
+            elif out_format == "md":
+                with open(f"{save_path}.md", "w", encoding="utf-8") as f_out:
+                    if final_data:
+                        f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
+                        f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
+                        for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
+            elif out_format == "docx":
+                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。\nコマンドプロンプトで pip install python-docx を実行してください。")
+                doc_out = Document()
+                if final_data:
+                    table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
+                    table.style = 'Table Grid'
+                    for r_idx, row_data in enumerate(final_data):
+                        row_cells = table.rows[r_idx].cells
+                        for c_idx, val in enumerate(row_data):
+                            if c_idx < len(row_cells):
+                                row_cells[c_idx].text = str(val)
+                doc_out.save(f"{save_path}.docx")
         doc.close(); gc.collect()
         ui.set_determinate(total_pages, total_pages, "完了")
 
 def extract_gemini_task(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
-    genai.configure(api_key=options.get("api_key", ""))
+    api_key = options.get("api_key", "")
+    genai.configure(api_key=api_key)
     
-    base_models_to_try = options.get("models_to_try", ['gemini-1.5-pro', 'gemini-1.5-flash'])
-    valid_models_to_try = []
+    models_to_try = []
     try:
-        available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for bm in base_models_to_try:
-            if bm in available_models: valid_models_to_try.append(bm)
-            elif f"{bm}-latest" in available_models: valid_models_to_try.append(f"{bm}-latest")
-        if not valid_models_to_try:
-            safe_fallbacks = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
-            for fb in safe_fallbacks:
-                if fb in available_models:
-                    valid_models_to_try.append(fb)
-                    break
-        if not valid_models_to_try:
-            flash_models = [m for m in available_models if 'flash' in m and 'image' not in m and 'embedding' not in m]
-            if flash_models: valid_models_to_try.append(flash_models[0])
-            elif available_models: valid_models_to_try.append(available_models[0])
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                name = m.name.replace('models/', '')
+                if name not in models_to_try:
+                    models_to_try.append(name)
     except Exception:
-        valid_models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro']
+        pass
         
-    if not valid_models_to_try: valid_models_to_try = ['gemini-1.5-flash']
+    fallbacks = [
+        'gemini-1.5-pro', 'gemini-1.5-pro-latest', 
+        'gemini-2.5-pro', 'gemini-2.0-pro',
+        'gemini-1.5-flash', 'gemini-2.5-flash'
+    ]
+    for f in fallbacks:
+        if f not in models_to_try:
+            models_to_try.append(f)
 
     out_format = options.get("out_format", "xlsx")
     crop_regions = options.get("crop_regions", [])
 
-    if out_format in ["csv", "xlsx"]:
+    if out_format in ["csv", "xlsx", "json", "md", "docx"]:
         if crop_regions:
-            prompt = """あなたは優秀なデータ入力オペレーターです。添付画像のテキストを読み取りJSONを作成してください。
-            【特別ルール】出力は「1つの列」にまとめ、セル分けしないでください。縦書きテキストは繋げて横書きに変換してください。
-            【出力形式】 {"rows": ["1行目のテキスト...", "2行目のテキスト..."]}"""
+            prompt = """
+            あなたは優秀なデータ入力オペレーターです。添付された画像のテキストを読み取り、行ごとに分割したJSONデータを作成してください。
+            
+            【特別ルール（絶対厳守）】
+            - 1つの画像（領域）につき、出力は「1つの列」にまとめます。列の分割（セル分け）は絶対にしないでください。
+            - 1行分のデータは、空白などで区切られていても分割せず、すべて1つの文字列としてまとめてください。
+            - 縦書きのテキスト（文字が縦に並んでいるもの）は、1文字ずつ分割したり改行したりせず、必ず繋げて横書きの1つの文字列に変換してください。
+
+            【出力形式（絶対厳守）】
+            以下のようなシンプルな配列（1次元リスト）の形式で出力してください。
+            {
+              "rows": [
+                "1行目の全テキスト...",
+                "2行目の全テキスト...",
+                "3行目の全テキスト..."
+              ]
+            }
+            """
         else:
-            prompt = """あなたは優秀なデータ入力オペレーターです。表画像を読み取りJSONを作成してください。
-            【特別ルール】見た目より「物理的な列の区切り(罫線・空白)」を最優先し分割してください。空白セルは `""` を挿入してください。縦書きテキストは繋げて横書きにしてください。
-            【出力形式】 {"header": ["列1", ...], "rows": [["データ1", ""], ...]}"""
+            prompt = """
+            あなたは優秀なデータ入力オペレーターです。添付された図面管理台帳などの表画像を読み取り、正確なJSONデータを作成してください。
+            
+            【データの分離精度を最優先する特別ルール（超重要）】
+            - データの見た目や文脈の意味よりも、「表の縦の罫線」や「文字列間の大きな空白」などの【物理的な列の区切り】を絶対的な基準として最優先し、物理的に分かれているデータは必ず別の要素として分割してください。
+            - 意味的に繋がっているように見えても、罫線や空白で区切られていれば絶対に1つの要素に結合しないでください。
+            - データが存在しない「空白セル」の場合は無視せず、必ず `""` (空文字) を該当位置に挿入し、列の位置を厳密に揃えてください。
+            - 1行のデータを丸ごと1つの文字列に繋げて出力することは絶対に禁止します。必ず各セルごとにリスト内で分割してください。
+            - 縦書きのテキスト（文字が縦に並んでいるもの）は、1文字ずつ分割したり複数行に分けたりせず、必ず繋げて横書きの1つの文字列に変換して出力してください。
+
+            【出力形式（絶対厳守）】
+            シンプルな配列（リスト）で出力してください。
+            {
+              "header": ["列1名", "列2名", "列3名", ...],
+              "rows": [
+                ["データ1", "データ2", "", "データ4", ...],
+                ["データ1", "データ2", "データ3", "", ...]
+              ]
+            }
+            """
         generation_config = {"response_mime_type": "application/json"}
     else:
-        prompt = "この画像の文字を可能な限り正確に読み取りプレーンテキストとして出力してください。縦書きの文章は横書きに変換してください。"
+        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
         generation_config = None
 
     for i, f in enumerate(files, 1):
@@ -141,6 +197,7 @@ def extract_gemini_task(files, save_dir, options, ui):
         doc = fitz.open(f)
         digits = max(2, len(str(len(doc))))
         total_pages = len(doc)
+        
         for page_num in range(total_pages):
             pix = doc[page_num].get_pixmap(dpi=300)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
@@ -154,123 +211,172 @@ def extract_gemini_task(files, save_dir, options, ui):
                     cropped_images.append(img_array[int(min(ry1, ry2)*h):int(max(ry1, ry2)*h), int(min(rx1, rx2)*w):int(max(rx1, rx2)*w)])
             else: cropped_images.append(img_array)
                 
+            num_regions = len(cropped_images)
             all_regions_data = []
+            
             for region_idx, crop_img_array in enumerate(cropped_images):
                 gray = cv2.cvtColor(crop_img_array, cv2.COLOR_RGB2GRAY)
                 blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-                clean_bg = np.where(cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5) == 255, 255, gray)
-                enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(clean_bg.astype(np.uint8))
-                img = Image.fromarray(cv2.cvtColor(cv2.addWeighted(enhanced, 1.5, cv2.GaussianBlur(enhanced, (0, 0), 2), -0.5, 0), cv2.COLOR_GRAY2RGB))
+                binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5)
+                clean_bg = np.where(binary == 255, 255, gray)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                enhanced = clahe.apply(clean_bg.astype(np.uint8))
+                blur_for_sharp = cv2.GaussianBlur(enhanced, (0, 0), 2)
+                sharp = cv2.addWeighted(enhanced, 1.5, blur_for_sharp, -0.5, 0)
+                img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
                 
+                max_retries = 4
                 extracted_text, success, last_error = "", False, ""
-                for attempt in range(4):
-                    for model_name in valid_models_to_try:
-                        ui.set_indeterminate(f"AI解析中... ( {page_num+1}/{total_pages}頁 | 領域 {region_idx+1}/{len(cropped_images)} )")
+                
+                for attempt in range(max_retries):
+                    for model_name in models_to_try:
+                        ui.set_indeterminate(f"AI解析中... ( {page_num+1}/{total_pages}頁 | 領域 {region_idx+1}/{num_regions} )")
                         try:
                             model = genai.GenerativeModel(model_name)
-                            response = model.generate_content([prompt, img], generation_config=generation_config) if generation_config else model.generate_content([prompt, img])
-                            if not response.parts: raise Exception("安全フィルタブロック")
-                            extracted_text = response.text.strip(); success = True; break
+                            if generation_config:
+                                response = model.generate_content([prompt, img], generation_config=generation_config)
+                            else:
+                                response = model.generate_content([prompt, img])
+                                
+                            if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
+                            extracted_text = response.text.strip()
+                            success = True
+                            break
                         except Exception as api_err: 
                             err_str = str(api_err)
                             if "429" in err_str or "Quota" in err_str: last_error = f"API制限(429): {model_name}の利用枠上限に達しました。"
                             elif "404" in err_str: last_error = f"モデル未発見(404): {model_name}が利用できません。"
                             else: last_error = err_str
                             continue
+                    
                     if success: break
-                    time.sleep((2 ** attempt) + random.uniform(0.5, 1.5))
+                    sleep_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                    time.sleep(sleep_time)
 
                 if success:
-                    time.sleep(4.0) 
-                    if out_format in ["xlsx", "csv"]:
+                    time.sleep(4.0)
+                    if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                         try:
                             data = json.loads(extracted_text)
                             if crop_regions:
-                                rows = data.get("rows", []) if isinstance(data, dict) else data
+                                rows = data.get("rows", [])
+                                if not rows and isinstance(data, list): rows = data
                                 page_data_to_write = []
-                                h_c, w_c = crop_img_array.shape[:2]
-                                clean_rows = ["".join([l.strip() for l in (" ".join(str(x) for x in r) if isinstance(r, list) else str(r)).split('\n') if l.strip()]) if all(len(l)<=2 for l in (" ".join(str(x) for x in r) if isinstance(r, list) else str(r)).split('\n')) else (" ".join(str(x) for x in r) if isinstance(r, list) else str(r)) for r in rows]
-                                if h_c > w_c * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()): page_data_to_write.append(["".join(clean_rows)])
+                                h_crop, w_crop = crop_img_array.shape[:2]
+                                clean_rows = []
+                                for r in rows:
+                                    val = " ".join([str(x) for x in r]) if isinstance(r, list) else str(r)
+                                    if '\n' in val:
+                                        lines = [l.strip() for l in val.split('\n') if l.strip()]
+                                        if all(len(l) <= 2 for l in lines): val = "".join(lines)
+                                    clean_rows.append(val)
+                                if h_crop > w_crop * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()): page_data_to_write.append(["".join(clean_rows)])
                                 else:
                                     for val in clean_rows: page_data_to_write.append([val])
                                 all_regions_data.append(page_data_to_write)
                             else:
                                 header = data.get("header", [])
                                 rows = data.get("rows", [])
-                                if not header and not rows and isinstance(data, list) and data:
-                                    header, rows = (data[0] if isinstance(data[0], list) else [str(data[0])]), data[1:]
+                                if not header and not rows and isinstance(data, list):
+                                    if data: header, rows = (data[0] if isinstance(data[0], list) else [str(data[0])]), data[1:]
                                 safe_header = [str(x).strip() for x in header] if isinstance(header, list) else []
-                                page_col_count = max(len(safe_header), max([len(r) for r in rows if isinstance(r, list)] + [0]))
-                                if not safe_header: safe_header = [f"列{i+1}" for i in range(page_col_count)]
-                                page_data_to_write = [(safe_header + [""] * page_col_count)[:page_col_count]]
+                                page_col_count = len(safe_header)
+                                for r in rows:
+                                    if isinstance(r, list) and len(r) > page_col_count: page_col_count = len(r)
+                                if not safe_header: safe_header = [f"列{idx+1}" for idx in range(page_col_count)]
+                                page_data_to_write = []
+                                padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
+                                page_data_to_write.append(padded_header)
                                 for row_data in rows:
-                                    safe_row = [("".join([l.strip() for l in str(v).split('\n')]) if '\n' in str(v) and len([l for l in str(v).split('\n') if l.strip()]) > 1 and all(len(l) <= 2 for l in str(v).split('\n') if l.strip()) else str(v)) for v in (parse_row_data(row_data) + [""] * page_col_count)[:page_col_count]]
-                                    if any(v != "" for v in safe_row): page_data_to_write.append(safe_row)
+                                    parsed_r = parse_row_data(row_data)
+                                    safe_row_local = []
+                                    for val in (parsed_r + [""] * page_col_count)[:page_col_count]:
+                                        v_str = str(val)
+                                        if '\n' in v_str:
+                                            lines = [l.strip() for l in v_str.split('\n') if l.strip()]
+                                            if len(lines) > 1 and all(len(l) <= 2 for l in lines): v_str = "".join(lines)
+                                        safe_row_local.append(v_str)
+                                    if any(v != "" for v in safe_row_local): page_data_to_write.append(safe_row_local)
                                 all_regions_data.append(page_data_to_write)
                         except Exception as e: all_regions_data.append([[f"JSONパースエラー: {e}"]])
                     else: all_regions_data.append([[line] for line in extracted_text.split('\n')])
-                else: all_regions_data.append([[f"抽出失敗: {last_error}"]])
+                else: all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
             
             merged_data = merge_2d_arrays_horizontally(all_regions_data)
             final_data = []
-            page_info = f"{page_num+1}/{len(doc)}"
+            page_info_str = f"{page_num+1}/{total_pages}"
+            
             if crop_regions:
-                final_data.append(["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(len(cropped_images))])
-                for row in merged_data: final_data.append([page_info] + row)
+                header = ["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(num_regions)]
+                final_data.append(header)
+                for row in merged_data: final_data.append([page_info_str] + row)
             else:
-                for r_idx, row in enumerate(merged_data):
-                    final_data.append(["ページ番号" if r_idx == 0 and out_format in ["xlsx", "csv"] else page_info] + row)
+                if out_format in ["xlsx", "csv", "json", "md", "docx"]:
+                    for r_idx, row in enumerate(merged_data):
+                        if r_idx == 0: final_data.append(["ページ番号"] + row)
+                        else: final_data.append([page_info_str] + row)
+                else:
+                    for row in merged_data: final_data.append([page_info_str] + row)
             
             save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出")
             if out_format == "xlsx":
                 wb = Workbook(); ws = wb.active; ws.title = f"Page_{str(page_num+1).zfill(digits)}"
                 for r_idx, row_data in enumerate(final_data, 1):
-                    for c_idx, val in enumerate(row_data, 1): 
-                        ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
+                    for c_idx, val in enumerate(row_data, 1): ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
                 auto_adjust_excel_column_width(ws); wb.save(f"{save_path}.xlsx")
             elif out_format == "csv":
                 with open(f"{save_path}.csv", "w", encoding="utf-8-sig", newline="") as f_out: csv.writer(f_out).writerows(final_data)
             elif out_format == "txt":
                 with open(f"{save_path}.txt", "w", encoding="utf-8") as f_out:
                     for row_data in final_data: f_out.write("\t".join(row_data) + "\n")
+            elif out_format == "json":
+                with open(f"{save_path}.json", "w", encoding="utf-8") as f_out: json.dump(final_data, f_out, ensure_ascii=False, indent=2)
+            elif out_format == "md":
+                with open(f"{save_path}.md", "w", encoding="utf-8") as f_out:
+                    if final_data:
+                        f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
+                        f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
+                        for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
+            elif out_format == "docx":
+                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。\nコマンドプロンプトで pip install python-docx を実行してください。")
+                doc_out = Document()
+                if final_data:
+                    table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
+                    table.style = 'Table Grid'
+                    for r_idx, row_data in enumerate(final_data):
+                        row_cells = table.rows[r_idx].cells
+                        for c_idx, val in enumerate(row_data):
+                            if c_idx < len(row_cells):
+                                row_cells[c_idx].text = str(val)
+                doc_out.save(f"{save_path}.docx")
         doc.close(); gc.collect()
         ui.set_determinate(total_pages, total_pages, "完了")
 
 def aggregate_only_task(files, save_dir, options, ui):
     out_format = options.get("out_format", "xlsx")
-    search_ext = "xlsx" if out_format in ["jpg", "png", "dxf"] else out_format
+    search_ext = "xlsx" if out_format in ["jpg", "png", "dxf", "svg", "tiff", "bmp"] else out_format
     
-    if not files: 
-        raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
+    if not files: raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
 
     target_files_set = set()
-    
-    # 1. UIから渡されたファイル・フォルダリストを素直に展開し、対象拡張子のファイルだけを確実に追加
     for f in files:
         if os.path.isdir(f):
             try:
                 for fn in os.listdir(f):
                     if fn.lower().endswith(f".{search_ext}") and "データ集約" not in fn and not fn.startswith("~$"):
                         target_files_set.add(os.path.abspath(os.path.join(f, fn)))
-            except Exception:
-                pass
+            except Exception: pass
         elif os.path.isfile(f):
             if f.lower().endswith(f".{search_ext}") and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
                 target_files_set.add(os.path.abspath(f))
 
-    # ファイル名の昇順（アルファベット・数字順）でソートし、上から下へ順番に結合する
     target_files = sorted(list(target_files_set))
-    
-    if not target_files: 
-        raise Exception(f"選択したファイルやフォルダ内に集約可能な (.{search_ext}) データが見つかりません。")
+    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な (.{search_ext}) データが見つかりません。")
 
     agg_header, agg_rows, agg_texts = ["元ファイル名"], [], []
     
-    # 2. レイアウト崩れを完全に防ぐ、シンプルかつ確実なマッピングロジック
     def map_to_master(fname, curr_header, curr_rows):
-        if not curr_header:
-            curr_header = [f"列{i+1}" for i in range(max(1, len(curr_rows[0]) if curr_rows else 1))]
-            
+        if not curr_header: curr_header = [f"列{i+1}" for i in range(max(1, len(curr_rows[0]) if curr_rows else 1))]
         safe_header = [str(h).strip() if h is not None else "" for h in parse_row_data(curr_header)]
         for i in range(len(safe_header)):
             if not safe_header[i]: safe_header[i] = f"列{i+1}"
@@ -278,52 +384,34 @@ def aggregate_only_task(files, save_dir, options, ui):
         col_mapping = {}
         for i, h in enumerate(safe_header):
             match_idx = -1
-            
-            # 【絶対ルール1】ヘッダー名が完全に一致する列があれば、そこへ結合
             for m_idx, m_h in enumerate(agg_header):
                 if m_idx == 0: continue
-                if h == str(m_h).strip() and h != "":
-                    match_idx = m_idx
-                    break
+                if h == str(m_h).strip() and h != "": match_idx = m_idx; break
             
-            # 【絶対ルール2】一致する名前が無ければ、同じ「列の位置（インデックス）」へ強制結合
             if match_idx == -1:
                 target_idx = i + 1
                 if target_idx < len(agg_header):
                     match_idx = target_idx
-                    # マスター側のヘッダーが仮の名前「列X」だった場合は、ちゃんとした名前で上書き
-                    if str(agg_header[target_idx]).startswith("列") and not h.startswith("列"):
-                        agg_header[target_idx] = h
-                else:
-                    # マスターの列数が足りない場合のみ、右側に新しい列を追加
-                    agg_header.append(h)
-                    match_idx = len(agg_header) - 1
-            
+                    if str(agg_header[target_idx]).startswith("列") and not h.startswith("列"): agg_header[target_idx] = h
+                else: agg_header.append(h); match_idx = len(agg_header) - 1
             col_mapping[i] = match_idx
                 
-        # データ行の追加
         for r in curr_rows:
             r_list = parse_row_data(r)
             row = [""] * len(agg_header)
-            row[0] = fname  # 最初の列はファイル名
+            row[0] = fname 
             for i, val in enumerate(r_list):
                 if i in col_mapping:
                     m_idx = col_mapping[i]
-                    if m_idx >= len(row): 
-                        row.extend([""] * (m_idx - len(row) + 1))
+                    if m_idx >= len(row): row.extend([""] * (m_idx - len(row) + 1))
                     row[m_idx] = str(val).strip() if val is not None and str(val).strip() != "None" else ""
-            
-            # 全てが空欄の行でなければマスターデータに追加
-            if any(v != "" for v in row[1:]): 
-                agg_rows.append(row)
+            if any(v != "" for v in row[1:]): agg_rows.append(row)
 
-    # 3. 各ファイルの読み込みと集約実行
     for i, f in enumerate(target_files, 1):
         ui.update_overall(i, len(target_files), f"データを集約中... ( {i} / {len(target_files)} ファイル )")
         ui.set_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
         
         fname = os.path.basename(f)
-        # 本アプリのAI抽出などでついた不要なサフィックスを消して見やすくする（外部ファイルはそのまま）
         fname = re.sub(r'(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + search_ext + '$', '.pdf', fname)
         
         try:
@@ -341,6 +429,36 @@ def aggregate_only_task(files, save_dir, options, ui):
                     if rows and len(rows) > 0:
                         if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
                         else: map_to_master(fname, rows[0], [])
+            elif search_ext == "json":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    try:
+                        rows = json.load(f_in)
+                        if rows and isinstance(rows, list) and len(rows) > 0:
+                            if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
+                            else: map_to_master(fname, rows[0], [])
+                    except Exception: pass
+            elif search_ext == "md":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    rows = []
+                    for line in f_in:
+                        line = line.strip()
+                        if line.startswith('|') and line.endswith('|'):
+                            cols = [c.strip().replace('<br>', '\n') for c in line[1:-1].split('|')]
+                            if all(c.strip() == '-' * len(c.strip()) or c.strip() == '' or ':' in c for c in cols): continue
+                            rows.append(cols)
+                    if rows and len(rows) > 0:
+                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
+                        else: map_to_master(fname, rows[0], [])
+            elif search_ext == "docx":
+                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
+                doc_in = Document(f)
+                for table in doc_in.tables:
+                    rows = []
+                    for row in table.rows:
+                        rows.append([cell.text for cell in row.cells])
+                    if rows and len(rows) > 0:
+                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
+                        else: map_to_master(fname, rows[0], [])
             elif search_ext == "txt":
                 with open(f, "r", encoding="utf-8") as f_in: 
                     agg_texts.append(f"[{fname}]\n{f_in.read()}")
@@ -349,11 +467,9 @@ def aggregate_only_task(files, save_dir, options, ui):
             
         ui.set_determinate(100, 100, "完了"); time.sleep(0.05)
         
-    # 4. 集約データの保存
     if len(target_files) > 0 and save_dir:
         ui.set_indeterminate("集約データを保存中...")
-        if search_ext in ["xlsx", "csv"]:
-            # 行の長さをヘッダーに合わせる
+        if search_ext in ["xlsx", "csv", "json", "md", "docx"]:
             final_data = [agg_header] + [(r + [""] * len(agg_header))[:len(agg_header)] for r in agg_rows]
             apply_text_inheritance(final_data)
             
@@ -361,12 +477,30 @@ def aggregate_only_task(files, save_dir, options, ui):
                 wb = Workbook(); ws = wb.active; ws.title = "集約データ"
                 for r_idx, r_data in enumerate(final_data, 1):
                     for c_idx, val in enumerate(r_data, 1): 
-                        # エラーとなる特殊文字を除外して書き込み
                         ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
                 auto_adjust_excel_column_width(ws); wb.save(os.path.join(save_dir, "データ集約.xlsx"))
             elif search_ext == "csv" and len(final_data) > 1:
                 with open(os.path.join(save_dir, "データ集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out: 
                     csv.writer(f_out).writerows(final_data)
+            elif search_ext == "json" and len(final_data) > 1:
+                with open(os.path.join(save_dir, "データ集約.json"), "w", encoding="utf-8") as f_out:
+                    json.dump(final_data, f_out, ensure_ascii=False, indent=2)
+            elif search_ext == "md" and len(final_data) > 1:
+                with open(os.path.join(save_dir, "データ集約.md"), "w", encoding="utf-8") as f_out:
+                    f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
+                    f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
+                    for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
+            elif search_ext == "docx" and len(final_data) > 1:
+                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
+                doc_out = Document()
+                table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
+                table.style = 'Table Grid'
+                for r_idx, row_data in enumerate(final_data):
+                    row_cells = table.rows[r_idx].cells
+                    for c_idx, val in enumerate(row_data):
+                        if c_idx < len(row_cells):
+                            row_cells[c_idx].text = str(val)
+                doc_out.save(os.path.join(save_dir, "データ集約.docx"))
         elif search_ext == "txt" and agg_texts:
             with open(os.path.join(save_dir, "データ集約.txt"), "w", encoding="utf-8") as f_out: 
                 f_out.write("\n\n".join(agg_texts))
