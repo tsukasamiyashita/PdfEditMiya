@@ -141,7 +141,6 @@ def test_api_key_ui():
     model_name = gemini_model_var.get()
     
     try:
-        # 現在選択されているモデルを利用してテストを実行
         model = genai.GenerativeModel(model_name)
         model.generate_content("Test")
         
@@ -154,7 +153,13 @@ def test_api_key_ui():
         if "404" in err_str or "not found" in err_str:
             messagebox.showerror("モデル利用不可", f"エラー: 選択したモデル「{model_name}」を利用する権限がないか、存在しません。\n別のモデルを選択してください。\n\n詳細:\n{e}")
         elif "429" in err_str or "quota" in err_str:
-            messagebox.showerror("利用枠超過", f"エラー: APIの利用枠（クォータ）を超過しています。\nしばらく待つか、課金設定（Paid Tier）を確認してください。\n\n詳細:\n{e}")
+            msg = f"エラー: APIの利用枠（クォータ）を超過しています。\n\n"
+            if "perday" in err_str:
+                msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n翌日になるまで待つか、課金設定（Paid Tier）を確認してください。\n\n"
+            else:
+                msg += "⚠️ 【1分間の利用上限】に達した可能性があります。\n約1分ほど待ってから再度テストしてください。\n\n"
+            msg += f"詳細:\n{e}"
+            messagebox.showerror("利用枠超過", msg)
         else:
             messagebox.showerror("通信エラー", f"APIキーまたは通信に問題が発生しました。\n\n詳細:\n{e}")
 
@@ -365,7 +370,6 @@ def open_model_settings():
     headers = ["選択", "モデル名", "無料枠 (Free Tier)", "課金枠 (Paid Tier)", "備考"]
     widths = [60, 220, 120, 120, 250]
     
-    # 修正: sticky="center" は無効なため、"" (デフォルトの中央配置)に変更しエラーを回避
     for col, (h_text, w) in enumerate(zip(headers, widths)):
         lbl = ttk.Label(list_frame, text=h_text, font=("Segoe UI", 9, "bold"), background=CARD_BG)
         lbl.grid(row=0, column=col, sticky="w" if col in [1, 4] else "", padx=5, pady=(0, 10))

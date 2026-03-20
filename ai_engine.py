@@ -122,7 +122,6 @@ def extract_gemini_task(files, save_dir, options, ui):
     api_key = options.get("api_key", "")
     genai.configure(api_key=api_key)
     
-    # ユーザーが選択したモデルのみを使用（自動フォールバックを廃止）
     models_to_try = options.get("models_to_try", ["gemini-2.5-flash"])
 
     out_format = options.get("out_format", "xlsx")
@@ -174,10 +173,8 @@ def extract_gemini_task(files, save_dir, options, ui):
         prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
         generation_config = None
 
-    # 【速度と安定性の究極改善】1分間のAPIリクエスト履歴を管理
-    # 最初の数回はノーウェイト（最高速）で処理し、無料枠（15回/分）を使い切った時だけ賢く待機する
     request_timestamps = []
-    MAX_RPM = 14  # Gemini無料枠の制限(15RPM)に対する安全マージン
+    MAX_RPM = 14  
 
     for i, f in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
@@ -219,25 +216,19 @@ def extract_gemini_task(files, save_dir, options, ui):
                 for attempt in range(max_retries):
                     for model_name in models_to_try:
                         
-                        # --- スマート待機ロジック (Token Bucket方式) ---
                         current_time = time.time()
-                        # 60秒以上経過した古いリクエスト履歴を削除して「空き枠」を作る
                         request_timestamps = [t for t in request_timestamps if current_time - t < 60.0]
                         
-                        # もし1分間に14回リクエストして枠がいっぱいなら、一番古い履歴が60秒経つまで待つ
                         if len(request_timestamps) >= MAX_RPM:
                             wait_time = 60.0 - (current_time - request_timestamps[0])
                             if wait_time > 0:
                                 ui.set_indeterminate(f"API無料枠の回復待ち... (約 {int(wait_time)}秒待機)")
-                                time.sleep(wait_time + 0.5)  # 0.5秒の安全マージン
+                                time.sleep(wait_time + 0.5)
                             
-                            # 待機が終わったら履歴を再度綺麗にする
                             current_time = time.time()
                             request_timestamps = [t for t in request_timestamps if current_time - t < 60.0]
                             
-                        # 今回の通信実行時刻を履歴に記録
                         request_timestamps.append(time.time())
-                        # ---------------------------------------------
                         
                         ui.set_indeterminate(f"AI解析中... ( {page_num+1}/{total_pages}頁 | 領域 {region_idx+1}/{num_regions} )")
                         
@@ -254,8 +245,12 @@ def extract_gemini_task(files, save_dir, options, ui):
                             break
                         except Exception as api_err: 
                             err_str = str(api_err)
-                            if "429" in err_str or "Quota" in err_str: 
-                                last_error = f"API制限(429): {model_name}の利用枠上限に達しました。"
+                            if "429" in err_str or "Quota" in err_str:
+                                # 1日上限(PerDay)と1分上限を分けて判別
+                                if "perday" in err_str.lower():
+                                    last_error = f"API制限(1日の上限): {model_name}の1日あたりの無料枠を使い切りました。翌日までお待ちください。"
+                                else:
+                                    last_error = f"API制限(429): {model_name}の1分間の利用枠上限に達しました。"
                             elif "404" in err_str: 
                                 last_error = f"モデル未発見(404): {model_name}が利用できません。"
                             else: 
@@ -264,14 +259,17 @@ def extract_gemini_task(files, save_dir, options, ui):
                     
                     if success: break
                     
-                    # 万が一429エラー等で失敗した場合のみ、指数関数的に待機時間を長くして回復を待つ
+                    # 万が一1日の上限に達してしまった場合は、いくら待機しても無駄なので即座に諦める
+                    if "1日の上限" in last_error:
+                        break
+                    
+                    # それ以外の429エラー等で失敗した場合のみ、指数関数的に待機時間を長くして回復を待つ
                     base_sleep = min(60.0, 4.0 * (2 ** attempt))
                     sleep_time = base_sleep + random.uniform(1.0, 3.0)
                     ui.set_indeterminate(f"API制限回避のため待機中... (約 {int(sleep_time)} 秒待機)")
                     time.sleep(sleep_time)
 
                 if success:
-                    # 以前のような無駄な time.sleep(4.0) は完全に撤廃し、最速で次の処理へ移行します
                     if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                         try:
                             data = json.loads(extracted_text)
