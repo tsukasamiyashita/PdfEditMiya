@@ -133,20 +133,20 @@ def extract_gemini_task(files, save_dir, options, ui):
     if out_format in ["csv", "xlsx", "json", "md", "docx"]:
         if crop_regions:
             prompt = """
-            あなたは優秀なデータ入力オペレーターです。添付された画像のテキストを読み取り、行ごとに分割したJSONデータを作成してください。
+            あなたは優秀なデータ入力オペレーターです。添付された複数の画像（抽出領域）のテキストを順番に読み取り、画像ごとに分割したJSONデータを作成してください。
             
             【特別ルール（絶対厳守）】
-            - 1つの画像（領域）につき、出力は「1つの列」にまとめます。列の分割（セル分け）は絶対にしないでください。
+            - 画像は複数枚渡されます。添付された順番通りに、1枚目を「領域1」、2枚目を「領域2」として処理してください。
+            - 1つの画像（領域）につき、出力は「1つの配列（列）」にまとめます。領域内での列の分割（セル分け）は絶対にしないでください。
             - 1行分のデータは、空白などで区切られていても分割せず、すべて1つの文字列としてまとめてください。
             - 縦書きのテキスト（文字が縦に並んでいるもの）は、1文字ずつ分割したり改行したりせず、必ず繋げて横書きの1つの文字列に変換してください。
 
             【出力形式（絶対厳守）】
-            以下のようなシンプルな配列（1次元リスト）の形式で出力してください。
+            以下のように、画像の枚数と同じ長さの配列（リストのリスト）を持つJSON形式で出力してください。
             {
-              "rows": [
-                "1行目の全テキスト...",
-                "2行目の全テキスト...",
-                "3行目の全テキスト..."
+              "regions": [
+                [ "画像1の1行目...", "画像1の2行目..." ],
+                [ "画像2の1行目...", "画像2の2行目..." ]
               ]
             }
             """
@@ -173,7 +173,14 @@ def extract_gemini_task(files, save_dir, options, ui):
             """
         generation_config = {"response_mime_type": "application/json"}
     else:
-        prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
+        if crop_regions:
+            prompt = """
+            添付された複数の画像に記載されているテキストを順番に読み取り、プレーンテキストとして出力してください。
+            各画像（領域）のテキストの間には、必ず「===REGION_SPLIT===」という区切り文字を挿入してください。
+            縦書きの文章は改行を取り除き、横書きに変換して出力してください。
+            """
+        else:
+            prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
         generation_config = None
 
     api_plan = options.get("api_plan", "free")
@@ -192,9 +199,10 @@ def extract_gemini_task(files, save_dir, options, ui):
         max_workers = 10  
         BATCH_SIZE = 10   
 
-    def process_api_request(img, page_num, region_idx, num_regions):
+    def process_api_request_for_page(imgs, page_num):
         max_retries = 8
         extracted_text, success, last_error = "", False, ""
+        num_regions = len(imgs)
         
         for attempt in range(max_retries):
             if ui.is_cancelled(): return "", False, "ユーザーによる中止"
@@ -225,11 +233,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                         rpm_wait_t = 60.0 - (expected_run_time - request_timestamps[0])
                         if rpm_wait_t > 0:
                             expected_run_time += rpm_wait_t
-                            last_request_time[0] = expected_run_time
-                        
-                        request_timestamps = [t for t in request_timestamps if expected_run_time - t < 60.0]
-                        
-                    request_timestamps.append(expected_run_time)
+                        request_timestamps.append(expected_run_time)
 
                 total_wait = wait_t + rpm_wait_t
                 if total_wait > 0:
@@ -240,14 +244,18 @@ def extract_gemini_task(files, save_dir, options, ui):
                         time.sleep(min(wait_step, total_wait))
                         total_wait -= wait_step
                 
-                ui.set_indeterminate(f"AI解析中... ( P.{page_num+1} | 領域 {region_idx+1}/{num_regions} )")
+                if num_regions > 1:
+                    ui.set_indeterminate(f"AI解析中... ( P.{page_num+1} | {num_regions}箇所の領域を一括処理 )")
+                else:
+                    ui.set_indeterminate(f"AI解析中... ( P.{page_num+1} )")
                 
                 try:
                     model = genai.GenerativeModel(model_name)
+                    contents = [prompt] + imgs
                     if generation_config:
-                        response = model.generate_content([prompt, img], generation_config=generation_config)
+                        response = model.generate_content(contents, generation_config=generation_config)
                     else:
-                        response = model.generate_content([prompt, img])
+                        response = model.generate_content(contents)
                         
                     if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
                     extracted_text = response.text.strip()
@@ -333,39 +341,33 @@ def extract_gemini_task(files, save_dir, options, ui):
                     
                     page_tasks[page_num][region_idx] = (img, crop_img_array)
             
-            page_results = {p: {} for p in range(batch_start, batch_end)}
+            page_results = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {}
                 for page_num, regions in page_tasks.items():
-                    num_regions = len(regions)
-                    for region_idx, (img, crop_img_array) in regions.items():
-                        future = executor.submit(process_api_request, img, page_num, region_idx, num_regions)
-                        futures[future] = (page_num, region_idx)
+                    imgs = [regions[i][0] for i in range(len(regions))]
+                    future = executor.submit(process_api_request_for_page, imgs, page_num)
+                    futures[future] = page_num
                 
                 for future in concurrent.futures.as_completed(futures):
-                    page_num, region_idx = futures[future]
+                    page_num = futures[future]
                     try:
                         extracted_text, success, last_error = future.result()
                     except Exception as e:
                         extracted_text, success, last_error = "", False, str(e)
-                    page_results[page_num][region_idx] = (extracted_text, success, last_error)
+                    page_results[page_num] = (extracted_text, success, last_error)
             
             for page_num in range(batch_start, batch_end):
                 all_regions_data = []
                 regions = page_tasks[page_num]
-                results = page_results[page_num]
                 num_regions = len(regions)
+                extracted_text, success, last_error = page_results[page_num]
                 
-                for region_idx in range(num_regions):
-                    crop_img_array = regions[region_idx][1]
-                    extracted_text, success, last_error = results[region_idx]
-                    
+                if crop_regions:
                     if success:
                         if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                             try:
-                                # JSONのパースエラーを回避するためのクリーニング処理
                                 clean_text = extracted_text.strip()
-                                # Markdownのバッククォートが返ってきた場合を除去する処理(切断回避のため結合形式で記述)
                                 md_fence = "`" * 3
                                 if clean_text.startswith(md_fence + "json"): clean_text = clean_text[7:]
                                 if clean_text.startswith(md_fence): clean_text = clean_text[3:]
@@ -373,9 +375,14 @@ def extract_gemini_task(files, save_dir, options, ui):
                                 clean_text = clean_text.strip()
                                 
                                 data = json.loads(clean_text)
-                                if crop_regions:
-                                    rows = data.get("rows", [])
-                                    if not rows and isinstance(data, list): rows = data
+                                regions_data = data.get("regions", [])
+                                if not regions_data and isinstance(data, list): regions_data = data
+                                
+                                for region_idx in range(num_regions):
+                                    crop_img_array = regions[region_idx][1]
+                                    rows = regions_data[region_idx] if region_idx < len(regions_data) else []
+                                    if not isinstance(rows, list): rows = [rows]
+                                    
                                     page_data_to_write = []
                                     h_crop, w_crop = crop_img_array.shape[:2]
                                     clean_rows = []
@@ -385,37 +392,61 @@ def extract_gemini_task(files, save_dir, options, ui):
                                             lines = [l.strip() for l in val.split('\n') if l.strip()]
                                             if all(len(l) <= 2 for l in lines): val = "".join(lines)
                                         clean_rows.append(val)
-                                    if h_crop > w_crop * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()): page_data_to_write.append(["".join(clean_rows)])
+                                    if h_crop > w_crop * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()): 
+                                        page_data_to_write.append(["".join(clean_rows)])
                                     else:
                                         for val in clean_rows: page_data_to_write.append([val])
                                     all_regions_data.append(page_data_to_write)
-                                else:
-                                    header = data.get("header", [])
-                                    rows = data.get("rows", [])
-                                    if not header and not rows and isinstance(data, list):
-                                        if data: header, rows = (data[0] if isinstance(data[0], list) else [str(data[0])]), data[1:]
-                                    safe_header = [str(x).strip() for x in header] if isinstance(header, list) else []
-                                    page_col_count = len(safe_header)
-                                    for r in rows:
-                                        if isinstance(r, list) and len(r) > page_col_count: page_col_count = len(r)
-                                    if not safe_header: safe_header = [f"列{idx+1}" for idx in range(page_col_count)]
-                                    page_data_to_write = []
-                                    padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
-                                    page_data_to_write.append(padded_header)
-                                    for row_data in rows:
-                                        parsed_r = parse_row_data(row_data)
-                                        safe_row_local = []
-                                        for val in (parsed_r + [""] * page_col_count)[:page_col_count]:
-                                            v_str = str(val)
-                                            if '\n' in v_str:
-                                                lines = [l.strip() for l in v_str.split('\n') if l.strip()]
-                                                if len(lines) > 1 and all(len(l) <= 2 for l in lines): v_str = "".join(lines)
-                                            safe_row_local.append(v_str)
-                                        if any(v != "" for v in safe_row_local): page_data_to_write.append(safe_row_local)
-                                    all_regions_data.append(page_data_to_write)
-                            except Exception as e: all_regions_data.append([[f"JSONパースエラー: {e}"]])
-                        else: all_regions_data.append([[line] for line in extracted_text.split('\n')])
-                    else: all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
+                            except Exception as e:
+                                for region_idx in range(num_regions): all_regions_data.append([[f"JSONパースエラー: {e}"]])
+                        else:
+                            text_blocks = extracted_text.split("===REGION_SPLIT===")
+                            for region_idx in range(num_regions):
+                                block_text = text_blocks[region_idx] if region_idx < len(text_blocks) else ""
+                                all_regions_data.append([[line] for line in block_text.strip().split('\n')])
+                    else:
+                        for region_idx in range(num_regions): all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
+                else:
+                    if success:
+                        if out_format in ["xlsx", "csv", "json", "md", "docx"]:
+                            try:
+                                clean_text = extracted_text.strip()
+                                md_fence = "`" * 3
+                                if clean_text.startswith(md_fence + "json"): clean_text = clean_text[7:]
+                                if clean_text.startswith(md_fence): clean_text = clean_text[3:]
+                                if clean_text.endswith(md_fence): clean_text = clean_text[:-3]
+                                clean_text = clean_text.strip()
+                                
+                                data = json.loads(clean_text)
+                                header = data.get("header", [])
+                                rows = data.get("rows", [])
+                                if not header and not rows and isinstance(data, list):
+                                    if data: header, rows = (data[0] if isinstance(data[0], list) else [str(data[0])]), data[1:]
+                                safe_header = [str(x).strip() for x in header] if isinstance(header, list) else []
+                                page_col_count = len(safe_header)
+                                for r in rows:
+                                    if isinstance(r, list) and len(r) > page_col_count: page_col_count = len(r)
+                                if not safe_header: safe_header = [f"列{idx+1}" for idx in range(page_col_count)]
+                                page_data_to_write = []
+                                padded_header = (safe_header + [""] * page_col_count)[:page_col_count]
+                                page_data_to_write.append(padded_header)
+                                for row_data in rows:
+                                    parsed_r = parse_row_data(row_data)
+                                    safe_row_local = []
+                                    for val in (parsed_r + [""] * page_col_count)[:page_col_count]:
+                                        v_str = str(val)
+                                        if '\n' in v_str:
+                                            lines = [l.strip() for l in v_str.split('\n') if l.strip()]
+                                            if len(lines) > 1 and all(len(l) <= 2 for l in lines): v_str = "".join(lines)
+                                        safe_row_local.append(v_str)
+                                    if any(v != "" for v in safe_row_local): page_data_to_write.append(safe_row_local)
+                                all_regions_data.append(page_data_to_write)
+                            except Exception as e:
+                                all_regions_data.append([[f"JSONパースエラー: {e}"]])
+                        else:
+                            all_regions_data.append([[line] for line in extracted_text.split('\n')])
+                    else:
+                        all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
                 
                 merged_data = merge_2d_arrays_horizontally(all_regions_data)
                 final_data = []
