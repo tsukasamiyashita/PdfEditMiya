@@ -15,6 +15,11 @@ try:
 except ImportError:
     Document = None
 
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
+
 from utils import (
     auto_adjust_excel_column_width,
     analyze_column_profile,
@@ -504,20 +509,22 @@ def aggregate_local_task(files, save_dir, options, ui):
     
     if not files: raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
 
+    search_exts = ["xlsx", "xlsm", "xls"] if search_ext == "xlsx" else [search_ext]
+
     target_files_set = set()
     for f in files:
         if os.path.isdir(f):
             try:
                 for fn in os.listdir(f):
-                    if fn.lower().endswith(f".{search_ext}") and "データ集約" not in fn and not fn.startswith("~$"):
+                    if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in fn and not fn.startswith("~$"):
                         target_files_set.add(os.path.abspath(os.path.join(f, fn)))
             except Exception: pass
         elif os.path.isfile(f):
-            if f.lower().endswith(f".{search_ext}") and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
+            if any(f.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
                 target_files_set.add(os.path.abspath(f))
 
     target_files = sorted(list(target_files_set))
-    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な (.{search_ext}) データが見つかりません。")
+    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な ({', '.join(['.' + ext for ext in search_exts])}) データが見つかりません。")
 
     agg_header, agg_rows, agg_texts = ["元ファイル名"], [], []
     
@@ -558,28 +565,61 @@ def aggregate_local_task(files, save_dir, options, ui):
         ui.update_overall(i, len(target_files), f"データを集約中... ( {i} / {len(target_files)} ファイル )")
         ui.set_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
         
+        ext_lower = os.path.splitext(f)[1].lower().strip('.')
+        # アプリで抽出したデータの場合は接尾辞を取り除いてスッキリさせ、一般のファイルならそのままの名前を使う
         fname = os.path.basename(f)
-        fname = re.sub(r'(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + search_ext + '$', '.pdf', fname)
+        fname = re.sub(r'(?i)(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + ext_lower + '$', '.pdf', fname)
         
         try:
-            if search_ext == "xlsx":
+            if ext_lower in ["xlsx", "xlsm"]:
                 wb = openpyxl.load_workbook(f, data_only=True)
                 for sheet in wb.sheetnames:
-                    rows = list(wb[sheet].iter_rows(values_only=True))
-                    if rows and len(rows) > 0:
-                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
-                        else: map_to_master(fname, rows[0], [])
+                    all_rows = list(wb[sheet].iter_rows(values_only=True))
+                    # 一般のExcelファイルに対応するため、最初の有効な行（空でない行）を自動的にヘッダーとして認識する
+                    valid_rows = []
+                    for r in all_rows:
+                        if r and any(c is not None and str(c).strip() != "" for c in r):
+                            valid_rows.append(r)
+                    if valid_rows:
+                        if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
+                        else: map_to_master(fname, valid_rows[0], [])
                 wb.close()
-            elif search_ext == "csv":
-                with open(f, "r", encoding="utf-8-sig") as f_in:
-                    rows = list(csv.reader(f_in))
-                    if rows and len(rows) > 0:
-                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
-                        else: map_to_master(fname, rows[0], [])
+            elif ext_lower == "xls":
+                if xlrd is None: raise Exception("xlsファイルの読み込みには 'xlrd' が必要です。")
+                wb = xlrd.open_workbook(f)
+                for sheet_idx in range(wb.nsheets):
+                    sheet = wb.sheet_by_index(sheet_idx)
+                    all_rows = [sheet.row_values(r_idx) for r_idx in range(sheet.nrows)]
+                    valid_rows = []
+                    for r in all_rows:
+                        if r and any(c is not None and str(c).strip() != "" for c in r):
+                            valid_rows.append(r)
+                    if valid_rows:
+                        if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
+                        else: map_to_master(fname, valid_rows[0], [])
+            elif ext_lower == "csv":
+                rows = []
+                # 他のシステムで作成された一般的なCSV（Shift_JISなど）にも対応するためのフォールバック処理
+                try:
+                    with open(f, "r", encoding="utf-8-sig") as f_in: rows = list(csv.reader(f_in))
+                except UnicodeDecodeError:
+                    try:
+                        with open(f, "r", encoding="cp932") as f_in: rows = list(csv.reader(f_in))
+                    except Exception:
+                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: rows = list(csv.reader(f_in))
+                
+                valid_rows = []
+                for r in rows:
+                    if r and any(c.strip() != "" for c in r):
+                        valid_rows.append(r)
+                if valid_rows:
+                    if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
+                    else: map_to_master(fname, valid_rows[0], [])
             elif search_ext == "json":
                 with open(f, "r", encoding="utf-8") as f_in:
                     try:
-                        rows = json.load(f_in)
+                        data = json.load(f_in)
+                        rows = data.get("rows", []) if isinstance(data, dict) else data
                         if rows and isinstance(rows, list) and len(rows) > 0:
                             if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
                             else: map_to_master(fname, rows[0], [])
@@ -607,8 +647,16 @@ def aggregate_local_task(files, save_dir, options, ui):
                         if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
                         else: map_to_master(fname, rows[0], [])
             elif search_ext == "txt":
-                with open(f, "r", encoding="utf-8") as f_in: 
-                    agg_texts.append(f"[{fname}]\n{f_in.read()}")
+                text_content = ""
+                try:
+                    with open(f, "r", encoding="utf-8-sig") as f_in: text_content = f_in.read()
+                except UnicodeDecodeError:
+                    try:
+                        with open(f, "r", encoding="cp932") as f_in: text_content = f_in.read()
+                    except Exception:
+                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: text_content = f_in.read()
+                if text_content.strip():
+                    agg_texts.append(f"[{fname}]\n{text_content}")
         except Exception as e: 
             print(f"Read Error in {f}: {e}")
             
@@ -659,20 +707,22 @@ def aggregate_gemini_task(files, save_dir, options, ui):
     
     if not files: raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
 
+    search_exts = ["xlsx", "xlsm", "xls"] if search_ext == "xlsx" else [search_ext]
+
     target_files_set = set()
     for f in files:
         if os.path.isdir(f):
             try:
                 for fn in os.listdir(f):
-                    if fn.lower().endswith(f".{search_ext}") and "データ集約" not in fn and not fn.startswith("~$"):
+                    if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in fn and not fn.startswith("~$"):
                         target_files_set.add(os.path.abspath(os.path.join(f, fn)))
             except Exception: pass
         elif os.path.isfile(f):
-            if f.lower().endswith(f".{search_ext}") and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
+            if any(f.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
                 target_files_set.add(os.path.abspath(f))
 
     target_files = sorted(list(target_files_set))
-    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な (.{search_ext}) データが見つかりません。")
+    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な ({', '.join(['.' + ext for ext in search_exts])}) データが見つかりません。")
 
     api_key = options.get("api_key", "")
     if not api_key: raise Exception("Gemini APIキーが設定されていません。「データ抽出・変換設定」でAPIキーを入力してください。")
@@ -687,29 +737,48 @@ def aggregate_gemini_task(files, save_dir, options, ui):
         ui.update_overall(i, len(target_files), f"データを読み込み中... ( {i} / {len(target_files)} ファイル )")
         ui.set_determinate(50, 100, f"読み込み: {os.path.basename(f)}")
         
+        ext_lower = os.path.splitext(f)[1].lower().strip('.')
         fname = os.path.basename(f)
-        fname = re.sub(r'(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + search_ext + '$', '.pdf', fname)
+        fname = re.sub(r'(?i)(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + ext_lower + '$', '.pdf', fname)
         
         file_data_str = f"--- [元ファイル名: {fname}] ---\n"
         
         try:
-            if search_ext == "xlsx":
+            if ext_lower in ["xlsx", "xlsm"]:
                 wb = openpyxl.load_workbook(f, data_only=True)
                 for sheet in wb.sheetnames:
                     for r in wb[sheet].iter_rows(values_only=True):
-                        if r and any(c is not None for c in r):
+                        # 空行を無視してデータがある行だけを抽出
+                        if r and any(c is not None and str(c).strip() != "" for c in r):
                             file_data_str += "\t".join([str(c).replace('\n', ' ') if c is not None else "" for c in r]) + "\n"
                 wb.close()
-            elif search_ext == "csv":
-                with open(f, "r", encoding="utf-8-sig") as f_in:
-                    for r in csv.reader(f_in):
-                        if any(c.strip() != "" for c in r):
-                            file_data_str += "\t".join([c.replace('\n', ' ') for c in r]) + "\n"
+            elif ext_lower == "xls":
+                if xlrd is None: raise Exception("xlsファイルの読み込みには 'xlrd' が必要です。")
+                wb = xlrd.open_workbook(f)
+                for sheet_idx in range(wb.nsheets):
+                    sheet = wb.sheet_by_index(sheet_idx)
+                    for r_idx in range(sheet.nrows):
+                        r = sheet.row_values(r_idx)
+                        if r and any(c is not None and str(c).strip() != "" for c in r):
+                            file_data_str += "\t".join([str(c).replace('\n', ' ') if c is not None else "" for c in r]) + "\n"
+            elif ext_lower == "csv":
+                rows = []
+                try:
+                    with open(f, "r", encoding="utf-8-sig") as f_in: rows = list(csv.reader(f_in))
+                except UnicodeDecodeError:
+                    try:
+                        with open(f, "r", encoding="cp932") as f_in: rows = list(csv.reader(f_in))
+                    except Exception:
+                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: rows = list(csv.reader(f_in))
+                for r in rows:
+                    if any(c.strip() != "" for c in r):
+                        file_data_str += "\t".join([c.replace('\n', ' ') for c in r]) + "\n"
             elif search_ext == "json":
                 with open(f, "r", encoding="utf-8") as f_in:
                     try:
-                        rows = json.load(f_in)
-                        if isinstance(rows, list):
+                        data = json.load(f_in)
+                        rows = data.get("rows", []) if isinstance(data, dict) else data
+                        if rows and isinstance(rows, list):
                             for r in rows:
                                 if isinstance(r, list): file_data_str += "\t".join([str(c).replace('\n', ' ') for c in r]) + "\n"
                                 else: file_data_str += str(r).replace('\n', ' ') + "\n"
@@ -729,8 +798,15 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                         for row in table.rows:
                             file_data_str += "\t".join([cell.text.replace('\n', ' ') for cell in row.cells]) + "\n"
             elif search_ext == "txt":
-                with open(f, "r", encoding="utf-8") as f_in:
-                    file_data_str += f_in.read() + "\n"
+                text_content = ""
+                try:
+                    with open(f, "r", encoding="utf-8-sig") as f_in: text_content = f_in.read()
+                except UnicodeDecodeError:
+                    try:
+                        with open(f, "r", encoding="cp932") as f_in: text_content = f_in.read()
+                    except Exception:
+                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: text_content = f_in.read()
+                file_data_str += text_content + "\n"
         except Exception as e:
             print(f"Read Error in {f}: {e}")
             

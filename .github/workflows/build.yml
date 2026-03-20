@@ -32,7 +32,7 @@ jobs:
         --onefile 
         --noconsole 
         --clean 
-        --name "PdfEditMiya-v2.0.0" 
+        --name "PdfEditMiya-v2.0.1" 
         --add-data "README.md;."
         app.py
 
@@ -40,5 +40,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: PdfEditMiya-v2.0.0
-        path: dist/PdfEditMiya-v2.0.0.exe
+        name: PdfEditMiya-v2.0.1
+        path: dist/PdfEditMiya-v2.0.1.exe
