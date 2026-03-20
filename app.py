@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, sys, threading
+import os, sys, threading, re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
 import tkinter.scrolledtext as st
@@ -20,8 +20,8 @@ from ai_engine import (
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v1.12.0"
-WINDOW_WIDTH, WINDOW_HEIGHT = 700, 840
+APP_TITLE, VERSION = "PdfEditMiya", "v2.0.0"
+WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750  # すべてのボタンが収まる適切な高さに調整
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -41,18 +41,16 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
-[ v1.12.0 ]
-- 【モデル設定機能】Gemini APIのモデルを選択できる設定画面を、分かりやすい表形式で追加しました。
-- 【アーキテクチャ刷新】機能ごとにモジュールを分割し、今後の拡張性を大幅に向上させました。
-- 【フォーマット追加】Word(.docx)、JSON、Markdown、SVG、TIFF、BMPでの抽出・変換に新しく対応しました。
-- 【データ集約の強化】指定したフォルダ内の無関係なファイルも含め、同一フォーマットのファイルをすべて集約対象とするように変更。
-- 【レイアウト保持】データ集約時に、元の表のレイアウト（列の順序）が階段状にズレないよう絶対ルールを追加。
-- 【UI改善】プレビュー画面を開いた際に自動で最大化表示されるよう変更し、マウスホイール等での操作性を向上。
-
-[ v1.11.0 ]
-- 【安定化】APIの接続制限による遅延を回避するため、Gemini複数領域抽出の通信を安定した直列処理へ戻しました。
-- 【安定化強化】Gemini APIのレートリミット(429エラー)対策として、リクエスト間の自動クールダウン(待機)と、Jitter(揺らぎ)を伴う再試行ロジックを実装。
-- 【UI改善】抽出範囲ボタンの表記をシンプルにし、「全体に戻す」リセットボタンを追加しました。
+[ v2.0.0 ]
+- 【UI改善】初期起動時にすべてのボタンが確実に表示されるよう、ウィンドウサイズを最適化しました。
+- 【UI改善】「①エンジン」と「②出力形式」の文字がラジオボタンと重ならないようにレイアウトを修正しました。
+- 【機能追加】処理中に安全に停止できる「処理を中止」ボタンを追加しました。
+- 【機能追加】メイン画面下部に現在の処理状況がわかる「ステータス表示」を追加しました。
+- 【UI改善】「①エンジン」と「②出力形式」の間に区切り線を追加し、設定項目の境界を分かりやすくしました。
+- 【高速化】Gemini APIの課金枠選択時に最大10スレッドの完全な並行処理を実現し、劇的な処理速度の向上を達成しました。
+- 【UI改善】メイン画面全体にスクロール機能を実装し、レスポンシブに対応しました。
+- 【機能追加】Gemini API利用時に「無料枠」と「課金枠」のプラン選択機能を追加しました。
+- 【UI改善】入力したAPIキーを表示して確認・コピーできるトグルボタンと、右クリックでの「貼り付け(ペースト)」に対応しました。
 """
 
 AI_HELP_TEXT = """
@@ -74,7 +72,7 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 3. 画面左上の「Create API key」ボタンを押します。
 4. 「Create API key in new project」を選択します。
 5. 発行された長い英数字の文字列（APIキー）をコピーします。
-6. 本アプリの「APIキー」入力枠に貼り付け、「テスト」ボタンを押してください。
+6. 本アプリの「APIキー」入力枠内で右クリックして貼り付け、「テスト」ボタンを押してください。
 
 ───────────────────────────
 ■ Tesseract を使う場合（オフライン・簡易抽出）
@@ -93,7 +91,7 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 # グローバル状態
 # ==============================
 selected_files, selected_folder, current_mode = [], "", None
-preset_save_dir, selected_crop_regions = "", []
+preset_save_dir, selected_crop_regions = [], []
 processing_popup, overall_label, overall_progress = None, None, None
 file_label, file_progress, cancelled = None, None, False
 
@@ -122,6 +120,9 @@ class UIController:
                 file_progress["value"] = step
                 if text: file_label.config(text=text)
         root.after(0, _task)
+    def is_cancelled(self):
+        global cancelled
+        return cancelled
 
 def resource_path(relative_path):
     try: base_path = sys._MEIPASS
@@ -132,6 +133,27 @@ def get_api_key():
     if os.path.exists(API_KEY_FILE):
         with open(API_KEY_FILE, "r", encoding="utf-8") as f: return f.read().strip()
     return None
+
+def toggle_api_key_show():
+    if api_key_entry.cget('show') == '*':
+        api_key_entry.configure(show='')
+        btn_api_check.configure(text="隠す")
+    else:
+        api_key_entry.configure(show='*')
+        btn_api_check.configure(text="確認")
+
+def show_context_menu(event):
+    menu = Menu(root, tearoff=0)
+    menu.add_command(label="貼り付け", command=lambda: paste_to_entry(event.widget))
+    menu.post(event.x_root, event.y_root)
+
+def paste_to_entry(widget):
+    try:
+        text = root.clipboard_get()
+        try: widget.delete("sel.first", "sel.last")
+        except tk.TclError: pass
+        widget.insert(tk.INSERT, text)
+    except tk.TclError: pass
 
 def test_api_key_ui():
     key = api_key_var.get().strip()
@@ -146,18 +168,22 @@ def test_api_key_ui():
         
         with open(API_KEY_FILE, "w", encoding="utf-8") as f: 
             f.write(key)
-        messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\n現在選択中のモデル「{model_name}」は利用可能です！")
+        messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\nAIモデル「{model_name}」による通信は正常です！")
         
     except Exception as e:
         err_str = str(e).lower()
         if "404" in err_str or "not found" in err_str:
-            messagebox.showerror("モデル利用不可", f"エラー: 選択したモデル「{model_name}」を利用する権限がないか、存在しません。\n別のモデルを選択してください。\n\n詳細:\n{e}")
+            messagebox.showerror("モデル利用不可", f"エラー: モデル「{model_name}」が存在しないか、利用する権限がありません。\n\n詳細:\n{e}")
         elif "429" in err_str or "quota" in err_str:
             msg = f"エラー: APIの利用枠（クォータ）を超過しています。\n\n"
-            if "perday" in err_str:
-                msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n翌日になるまで待つか、課金設定（Paid Tier）を確認してください。\n\n"
+            m = re.search(r'retry in ([\d\.]+)s', err_str)
+            if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
+            if m:
+                wait_sec = int(float(m.group(1)))
+                msg += f"⚠️ Googleのバースト制限です。約 {wait_sec} 秒後に利用枠が回復します。\n表示された秒数だけ待機してから再度テストしてください。\n\n"
             else:
-                msg += "⚠️ 【1分間の利用上限】に達した可能性があります。\n約1分ほど待ってから再度テストしてください。\n\n"
+                if "perday" in err_str.lower(): msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n翌日になるまで待つか、課金設定（Paid Tier）を確認してください。\n\n"
+                else: msg += "⚠️ APIの無料枠制限に達しました。\n約1分ほど待ってから再度テストするか、課金設定をご確認ください。\n\n"
             msg += f"詳細:\n{e}"
             messagebox.showerror("利用枠超過", msg)
         else:
@@ -175,16 +201,42 @@ def show_message(msg, color=PRIMARY):
     root.after(0, _task)
 
 def show_processing(total_files=1):
-    global processing_popup, overall_label, overall_progress, file_label, file_progress
+    global processing_popup, overall_label, overall_progress, file_label, file_progress, btn_cancel
     processing_popup = tk.Toplevel(root)
-    processing_popup.title("処理を実行中..."); processing_popup.geometry("440x210"); processing_popup.configure(bg=CARD_BG); processing_popup.grab_set()
-    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 220; y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 105
+    processing_popup.title("処理を実行中...")
+    processing_popup.geometry("440x280")
+    processing_popup.configure(bg=CARD_BG)
+    processing_popup.grab_set()
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 220
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 140
     processing_popup.geometry(f"+{x}+{y}")
+    
+    engine_name = engine_var.get()
+    if engine_name == "Gemini":
+        model_name = gemini_model_var.get()
+        engine_text = f"使用エンジン: Gemini API ( {model_name} )"
+    elif engine_name == "Tesseract":
+        engine_text = "使用エンジン: Tesseract (ローカルOCR)"
+    else:
+        engine_text = "使用エンジン: Python標準ライブラリ"
+        
+    engine_label = ttk.Label(processing_popup, text=engine_text, font=("Segoe UI", 9, "bold"), background=CARD_BG, foreground=COLOR_PURPLE)
+    engine_label.pack(pady=(20, 0))
+
     overall_label = ttk.Label(processing_popup, text=f"全体の進捗 ( 0 / {total_files} ファイル )", font=("Segoe UI", 10, "bold"), background=CARD_BG, foreground=PRIMARY)
-    overall_label.pack(pady=(25, 5))
+    overall_label.pack(pady=(15, 5))
     overall_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=total_files, length=380); overall_progress.pack(pady=(0, 20))
     file_label = ttk.Label(processing_popup, text="現在のファイルを準備中...", font=("Segoe UI", 9), background=CARD_BG, foreground=MUTED_TEXT); file_label.pack(pady=(5, 5))
     file_progress = ttk.Progressbar(processing_popup, mode="determinate", maximum=1, length=380); file_progress.pack(pady=(0, 10))
+    
+    def cancel_processing():
+        global cancelled
+        if messagebox.askyesno("確認", "処理を中止しますか？", parent=processing_popup):
+            cancelled = True
+            btn_cancel.config(text="中止処理中...", state=tk.DISABLED)
+            
+    btn_cancel = ttk.Button(processing_popup, text="処理を中止", command=cancel_processing, style="Warning.TButton")
+    btn_cancel.pack(pady=(5, 10))
 
 def close_processing():
     def _task():
@@ -192,9 +244,12 @@ def close_processing():
         if processing_popup: processing_popup.destroy(); processing_popup = None
     root.after(0, _task)
 
-def run_task(func):
+def run_task(func, task_name):
     global cancelled; cancelled = False
     try:
+        def _start_status(): status_label.config(text=f"ステータス: {task_name} を実行中...", foreground=PRIMARY)
+        root.after(0, _start_status)
+        
         files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
         if not files: return
         save_dir = os.path.dirname(files[0]) if save_option.get() == 1 else preset_save_dir
@@ -202,15 +257,29 @@ def run_task(func):
             "rotate_deg": rotate_option.get(), "crop_regions": selected_crop_regions, "out_format": output_format_var.get(),
             "folder_name": os.path.basename(selected_folder) if selected_folder else "Merged",
             "api_key": api_key_var.get().strip(),
-            "models_to_try": [gemini_model_var.get()] if engine_var.get() == "Gemini" else []
+            "models_to_try": [gemini_model_var.get()] if engine_var.get() == "Gemini" else [],
+            "api_plan": api_plan_var.get()
         }
         func(files, save_dir, options, UIController())
         close_processing()
-        if not cancelled: show_message("✅ 処理が完了しました", SUCCESS)
+        
+        def _end_status():
+            if cancelled:
+                show_message("⚠️ 処理が中止されました", COLOR_WARNING)
+                status_label.config(text=f"ステータス: {task_name} は中止されました", foreground=COLOR_WARNING)
+            else:
+                show_message("✅ 処理が完了しました", SUCCESS)
+                status_label.config(text=f"ステータス: {task_name} が完了しました", foreground=SUCCESS)
+        root.after(0, _end_status)
+        
     except Exception as e:
-        print(f"Error: {e}"); close_processing(); show_message(f"❌ エラーが発生しました\n{str(e)[:40]}...", ERROR)
+        print(f"Error: {e}"); close_processing()
+        def _err_status():
+            show_message(f"❌ エラーが発生しました\n{str(e)[:40]}...", ERROR)
+            status_label.config(text=f"ステータス: {task_name} でエラーが発生しました", foreground=ERROR)
+        root.after(0, _err_status)
 
-def safe_run(func):
+def safe_run(func, task_name="処理"):
     files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
     if not files: return
     global preset_save_dir
@@ -219,28 +288,31 @@ def safe_run(func):
         if not folder: return
         preset_save_dir = folder; save_label.config(text=preset_save_dir)
     show_processing(len(files))
-    threading.Thread(target=run_task, args=(func,), daemon=True).start()
+    threading.Thread(target=run_task, args=(func, task_name), daemon=True).start()
 
 def run_selected_extraction():
     engine = engine_var.get(); fmt = output_format_var.get()
     
-    if fmt == "jpg": safe_run(convert_to_image_jpg)
-    elif fmt == "png": safe_run(convert_to_image_png)
-    elif fmt == "tiff": safe_run(convert_to_image_tiff)
-    elif fmt == "bmp": safe_run(convert_to_image_bmp)
-    elif fmt == "svg": safe_run(convert_to_svg)
-    elif fmt == "dxf": safe_run(convert_to_dxf)
+    engine_ja = {"Internal": "標準ライブラリ", "Tesseract": "Tesseract OCR", "Gemini": "Gemini API"}.get(engine, engine)
+    task_name = f"抽出・変換 ({engine_ja} -> {fmt.upper()})"
+    
+    if fmt == "jpg": safe_run(convert_to_image_jpg, task_name)
+    elif fmt == "png": safe_run(convert_to_image_png, task_name)
+    elif fmt == "tiff": safe_run(convert_to_image_tiff, task_name)
+    elif fmt == "bmp": safe_run(convert_to_image_bmp, task_name)
+    elif fmt == "svg": safe_run(convert_to_svg, task_name)
+    elif fmt == "dxf": safe_run(convert_to_dxf, task_name)
     elif engine == "Internal":
-        if fmt == "txt": safe_run(extract_text_internal)
-        elif fmt == "xlsx": safe_run(convert_to_excel_internal)
-        elif fmt == "csv": safe_run(convert_to_csv_internal)
+        if fmt == "txt": safe_run(extract_text_internal, task_name)
+        elif fmt == "xlsx": safe_run(convert_to_excel_internal, task_name)
+        elif fmt == "csv": safe_run(convert_to_csv_internal, task_name)
         elif fmt in ["json", "md", "docx"]: 
             messagebox.showinfo("情報", "標準ライブラリ（Internal）はJSON / Markdown / Word出力に未対応です。\nExcelやCSV、またはAIエンジンを使用してください。")
             return
-    elif engine == "Tesseract": safe_run(extract_tesseract_task)
+    elif engine == "Tesseract": safe_run(extract_tesseract_task, task_name)
     elif engine == "Gemini":
         if not api_key_var.get().strip(): return messagebox.showerror("エラー", "Gemini APIキーを入力してください。")
-        safe_run(extract_gemini_task)
+        safe_run(extract_gemini_task, task_name)
 
 class CropSelector:
     def __init__(self, master, pdf_path):
@@ -301,8 +373,7 @@ class CropSelector:
             raise Exception(f"プレビュー生成失敗: {e}")
 
         self.top.update_idletasks()
-        try:
-            self.top.state('zoomed')
+        try: self.top.state('zoomed')
         except Exception:
             w, h = master.winfo_screenwidth(), master.winfo_screenheight()
             self.top.geometry(f"{w}x{h}+0+0")
@@ -354,55 +425,6 @@ def reset_crop_regions():
     global selected_crop_regions; selected_crop_regions = []
     btn_select_crop.config(text="抽出範囲を選択")
 
-def open_model_settings():
-    win = tk.Toplevel(root)
-    win.title("Gemini API モデル設定")
-    win.geometry("820x450")
-    win.configure(bg=CARD_BG)
-    win.grab_set()
-    
-    lbl_title = ttk.Label(win, text="使用するAIモデルを選択してください", font=("Segoe UI", 12, "bold"), background=CARD_BG, foreground=PRIMARY)
-    lbl_title.pack(pady=(15, 10))
-    
-    list_frame = ttk.Frame(win, style="Card.TFrame")
-    list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
-    
-    headers = ["選択", "モデル名", "無料枠 (Free Tier)", "課金枠 (Paid Tier)", "備考"]
-    widths = [60, 220, 120, 120, 250]
-    
-    for col, (h_text, w) in enumerate(zip(headers, widths)):
-        lbl = ttk.Label(list_frame, text=h_text, font=("Segoe UI", 9, "bold"), background=CARD_BG)
-        lbl.grid(row=0, column=col, sticky="w" if col in [1, 4] else "", padx=5, pady=(0, 10))
-        list_frame.grid_columnconfigure(col, minsize=w)
-    
-    ttk.Separator(list_frame, orient="horizontal").grid(row=1, column=0, columnspan=5, sticky="ew", pady=(0, 10))
-    
-    models = [
-        ("gemini-2.5-flash", "Gemini 2.5 Flash / Flash-Lite", "○", "○", "無料でも十分な回数利用可能。(標準推奨)"),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro", "○", "○", "無料枠では1分あたりの利用回数（RPM）に厳しい制限あり。"),
-        ("gemini-3.0-flash", "Gemini 3 Flash / 3.1 Flash-Lite", "○", "○", "最新世代の高速モデルも無料でテスト可能。"),
-        ("gemini-3.0-pro", "Gemini 3.1 Pro / 3 Pro", "×", "○", "課金設定が必須。最高の最高性能モデル。"),
-        ("gemini-3.1-flash-image", "Gemini 3.1 Flash Image など", "×", "○", "最新の画像生成などマルチモーダル特化モデルは課金必須。")
-    ]
-    
-    row_idx = 2
-    for val, name, free, paid, desc in models:
-        rb = ttk.Radiobutton(list_frame, variable=gemini_model_var, value=val)
-        rb.grid(row=row_idx, column=0, pady=6)
-        
-        ttk.Label(list_frame, text=name, font=("Segoe UI", 9, "bold"), background=CARD_BG).grid(row=row_idx, column=1, sticky="w", padx=5)
-        ttk.Label(list_frame, text=free, background=CARD_BG).grid(row=row_idx, column=2, padx=5)
-        ttk.Label(list_frame, text=paid, background=CARD_BG).grid(row=row_idx, column=3, padx=5)
-        ttk.Label(list_frame, text=desc, background=CARD_BG, wraplength=230).grid(row=row_idx, column=4, sticky="w", padx=5)
-        
-        row_idx += 1
-        ttk.Separator(list_frame, orient="horizontal").grid(row=row_idx, column=0, columnspan=5, sticky="ew", pady=2)
-        row_idx += 1
-
-    btn_frame = ttk.Frame(win, style="Card.TFrame")
-    btn_frame.pack(pady=(10, 20))
-    ttk.Button(btn_frame, text="設定して閉じる", command=win.destroy, style="Primary.TButton", width=15).pack()
-
 def select_files():
     global selected_files, selected_folder, current_mode
     files = filedialog.askopenfilenames(filetypes=[("すべての対応ファイル", "*.pdf;*.xlsx;*.csv;*.txt;*.json;*.md;*.docx"), ("PDF", "*.pdf")])
@@ -431,13 +453,12 @@ def toggle_extraction_settings(*args):
     state_gemini = tk.NORMAL if is_gemini else tk.DISABLED
     
     api_key_entry.configure(state=state_gemini)
+    btn_api_check.configure(state=state_gemini)
     btn_api_test.configure(state=state_gemini)
     
-    if engine_var.get() == "Gemini":
-        btn_model_config.pack(side=tk.LEFT, padx=(5, 0))
-        btn_model_config.configure(state=tk.NORMAL if is_active else tk.DISABLED)
-    else:
-        btn_model_config.pack_forget()
+    for child in api_plan_frame.winfo_children():
+        if isinstance(child, ttk.Radiobutton) or isinstance(child, ttk.Label): 
+            child.configure(state=state_gemini)
         
     state_crop = tk.NORMAL if is_active else tk.DISABLED
     for child in crop_frame.winfo_children():
@@ -470,11 +491,16 @@ def show_readme():
     show_text_window("Readme", content)
 
 # ==============================
-# UI画面の構築
+# UI画面の構築 (レスポンシブ設計)
 # ==============================
-root = tk.Tk(); root.title(f"{APP_TITLE} {VERSION}"); root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0"); root.configure(bg=BG_COLOR)
+root = tk.Tk(); root.title(f"{APP_TITLE} {VERSION}")
+root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
+root.minsize(width=760, height=650) # ウィンドウの最小サイズを引き上げ、見切れを防止
+root.configure(bg=BG_COLOR)
+
 style = ttk.Style(); style.theme_use("clam") if "clam" in style.theme_names() else None
 style.configure(".", background=BG_COLOR, font=("Segoe UI", 10))
+style.configure("Main.TFrame", background=BG_COLOR)
 style.configure("Card.TFrame", background=CARD_BG)
 style.configure("Card.TLabelframe", background=CARD_BG, borderwidth=1, bordercolor=BORDER_COLOR)
 style.configure("Card.TLabelframe.Label", background=CARD_BG, foreground=PRIMARY, font=("Segoe UI", 11, "bold"))
@@ -505,77 +531,116 @@ rotate_option, save_option = tk.IntVar(value=270), tk.IntVar(value=1)
 engine_var, output_format_var = tk.StringVar(value="Internal"), tk.StringVar(value="xlsx")
 api_key_var = tk.StringVar(value=get_api_key() or "")
 gemini_model_var = tk.StringVar(value="gemini-2.5-flash")
+api_plan_var = tk.StringVar(value="free")
+
 engine_var.trace("w", toggle_extraction_settings)
 
-main_container = ttk.Frame(root, padding=15); main_container.pack(fill=tk.BOTH, expand=True)
-title_frame = ttk.Frame(main_container); title_frame.pack(fill=tk.X, pady=(0, 10))
-ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY).pack(side=tk.LEFT)
-ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT).pack(side=tk.LEFT, pady=(8, 0))
+# 全体を覆うスクロール可能なキャンバス領域の構築
+main_outer = ttk.Frame(root)
+main_outer.pack(fill=tk.BOTH, expand=True)
 
-file_card = ttk.Frame(main_container, style="Card.TFrame", padding=10); file_card.pack(fill=tk.X, pady=5)
+canvas = tk.Canvas(main_outer, bg=BG_COLOR, highlightthickness=0)
+scrollbar = ttk.Scrollbar(main_outer, orient=tk.VERTICAL, command=canvas.yview)
+
+main_container = ttk.Frame(canvas, padding=10, style="Main.TFrame")
+canvas_frame_id = canvas.create_window((0, 0), window=main_container, anchor="nw")
+
+def on_canvas_configure(event): canvas.itemconfig(canvas_frame_id, width=event.width)
+canvas.bind('<Configure>', on_canvas_configure)
+
+def on_frame_configure(event): canvas.configure(scrollregion=canvas.bbox("all"))
+main_container.bind('<Configure>', on_frame_configure)
+
+def _on_mousewheel(event):
+    widget = root.winfo_containing(event.x_root, event.y_root)
+    if widget and widget.winfo_toplevel() == root:
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+root.bind_all("<MouseWheel>", _on_mousewheel)
+
+canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+# --- 以下、既存のUIコンポーネント群を main_container 内に配置 ---
+title_frame = ttk.Frame(main_container, style="Main.TFrame"); title_frame.pack(fill=tk.X, pady=(0, 2))
+ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY, background=BG_COLOR).pack(side=tk.LEFT)
+ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT, background=BG_COLOR).pack(side=tk.LEFT, pady=(8, 0))
+
+file_card = ttk.Frame(main_container, style="Card.TFrame", padding=5); file_card.pack(fill=tk.X, pady=2)
 btn_frame = ttk.Frame(file_card, style="Card.TFrame"); btn_frame.pack()
 ttk.Button(btn_frame, text="📄 ファイルを選択", command=select_files, width=22, style="Primary.TButton").grid(row=0, column=0, padx=8)
 ttk.Button(btn_frame, text="📁 フォルダを選択", command=select_folder, width=22, style="Primary.TButton").grid(row=0, column=1, padx=8)
-path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=TEXT_COLOR, wraplength=580, justify="center"); path_label.pack(pady=(10, 0))
+path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=TEXT_COLOR, wraplength=580, justify="center"); path_label.pack(pady=(5, 0))
 
-settings_grid = ttk.Frame(main_container); settings_grid.pack(fill=tk.X, pady=5); settings_grid.columnconfigure(0, weight=1); settings_grid.columnconfigure(1, weight=1)
-save_frame = ttk.LabelFrame(settings_grid, text=" 保存先設定 ", style="Card.TLabelframe", padding=8); save_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+settings_grid = ttk.Frame(main_container, style="Main.TFrame"); settings_grid.pack(fill=tk.X, pady=2); settings_grid.columnconfigure(0, weight=1); settings_grid.columnconfigure(1, weight=1)
+save_frame = ttk.LabelFrame(settings_grid, text=" 保存先設定 ", style="Card.TLabelframe", padding=5); save_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 ttk.Radiobutton(save_frame, text="元のファイルと同じフォルダ", variable=save_option, value=1, command=on_save_mode_change).pack(anchor="w", pady=2)
 ttk.Radiobutton(save_frame, text="任意のフォルダを指定", variable=save_option, value=2, command=on_save_mode_change).pack(anchor="w", pady=2)
-ttk.Button(save_frame, text="📂 フォルダ参照", command=select_save_dir).pack(pady=(8, 2))
+ttk.Button(save_frame, text="📂 フォルダ参照", command=select_save_dir).pack(pady=(4, 2))
 save_label = ttk.Label(save_frame, text="同じフォルダ", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 9)); save_label.pack()
 
-rotate_frame = ttk.LabelFrame(settings_grid, text=" 回転設定 ", style="Card.TLabelframe", padding=8); rotate_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-for t, v in [("左（270°）", 270), ("上下（180°）", 180), ("右（90°）", 90)]: ttk.Radiobutton(rotate_frame, text=t, variable=rotate_option, value=v).pack(anchor="w", pady=4)
+rotate_frame = ttk.LabelFrame(settings_grid, text=" 回転設定 ", style="Card.TLabelframe", padding=5); rotate_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+for t, v in [("左（270°）", 270), ("上下（180°）", 180), ("右（90°）", 90)]: ttk.Radiobutton(rotate_frame, text=t, variable=rotate_option, value=v).pack(anchor="w", pady=2)
 
-extract_frame = ttk.LabelFrame(main_container, text=" ⚙️ データ抽出・変換設定 ", style="Card.TLabelframe", padding=8); extract_frame.pack(fill=tk.X, pady=10)
-engine_frame = ttk.Frame(extract_frame, style="Card.TFrame"); engine_frame.pack(fill=tk.X, pady=(0, 5))
+extract_frame = ttk.LabelFrame(main_container, text=" ⚙️ データ抽出・変換設定 ", style="Card.TLabelframe", padding=5); extract_frame.pack(fill=tk.X, pady=5)
+
+engine_frame = ttk.Frame(extract_frame, style="Card.TFrame"); engine_frame.pack(fill=tk.X, pady=(0, 2))
+# ★ Labelの幅を12に拡張し、文字がラジオボタンと重ならないように修正
 ttk.Label(engine_frame, text="① エンジン:", width=12, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 engine_inner = ttk.Frame(engine_frame, style="Card.TFrame"); engine_inner.pack(anchor="w", fill=tk.X)
 for text, val in [("Python標準ライブラリ (高速・オフライン)", "Internal"), ("Tesseract (ローカルOCR)", "Tesseract"), ("Gemini API (超高精度AI)", "Gemini")]:
-    ttk.Radiobutton(engine_inner, text=text, variable=engine_var, value=val).pack(anchor="w", pady=2)
+    ttk.Radiobutton(engine_inner, text=text, variable=engine_var, value=val).pack(anchor="w", pady=1)
 
-format_frame = ttk.Frame(extract_frame, style="Card.TFrame"); format_frame.pack(fill=tk.X, pady=5)
+ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=6)
+
+format_frame = ttk.Frame(extract_frame, style="Card.TFrame"); format_frame.pack(fill=tk.X, pady=0)
+# ★ Labelの幅を12に拡張し、文字がラジオボタンと重ならないように修正
 ttk.Label(format_frame, text="② 出力形式:", width=12, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 
-formats_row1 = [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv"), ("Text (.txt)", "txt"), ("JSON (.json)", "json")]
-formats_row2 = [("Markdown (.md)", "md"), ("Word (.docx)", "docx"), ("JPEG (.jpg)", "jpg"), ("PNG (.png)", "png")]
-formats_row3 = [("SVG (.svg)", "svg"), ("TIFF (.tiff)", "tiff"), ("BMP (.bmp)", "bmp"), ("DXF (.dxf)", "dxf")]
+formats_row1 = [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv"), ("Text (.txt)", "txt"), ("JSON (.json)", "json"), ("Markdown (.md)", "md"), ("Word (.docx)", "docx")]
+formats_row2 = [("JPEG (.jpg)", "jpg"), ("PNG (.png)", "png"), ("SVG (.svg)", "svg"), ("TIFF (.tiff)", "tiff"), ("BMP (.bmp)", "bmp"), ("DXF (.dxf)", "dxf")]
 
 format_inner1 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner1.pack(anchor="w", fill=tk.X)
 for text, val in formats_row1:
-    rb = ttk.Radiobutton(format_inner1, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
-format_inner2 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner2.pack(anchor="w", fill=tk.X, pady=(4, 0))
+    rb = ttk.Radiobutton(format_inner1, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 10)); format_radiobuttons[val] = rb
+format_inner2 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner2.pack(anchor="w", fill=tk.X, pady=(2, 0))
 for text, val in formats_row2:
-    rb = ttk.Radiobutton(format_inner2, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
-format_inner3 = ttk.Frame(format_frame, style="Card.TFrame"); format_inner3.pack(anchor="w", fill=tk.X, pady=(4, 0))
-for text, val in formats_row3:
-    rb = ttk.Radiobutton(format_inner3, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 15)); format_radiobuttons[val] = rb
+    rb = ttk.Radiobutton(format_inner2, text=text, variable=output_format_var, value=val); rb.pack(side=tk.LEFT, padx=(0, 10)); format_radiobuttons[val] = rb
 
-ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=8)
+ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=6)
 
-api_key_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_key_frame.pack(fill=tk.X, pady=5)
+api_key_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_key_frame.pack(fill=tk.X, pady=2)
 ttk.Label(api_key_frame, text="[AI用] APIキー:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 api_key_entry = ttk.Entry(api_key_frame, textvariable=api_key_var, width=45, show="*"); api_key_entry.pack(side=tk.LEFT, padx=(0, 8))
+api_key_entry.bind("<Button-3>", show_context_menu)
+btn_api_check = ttk.Button(api_key_frame, text="確認", command=toggle_api_key_show, width=6); btn_api_check.pack(side=tk.LEFT, padx=(0, 5))
 btn_api_test = ttk.Button(api_key_frame, text="テスト", command=test_api_key_ui, width=6); btn_api_test.pack(side=tk.LEFT)
-btn_model_config = ttk.Button(api_key_frame, text="モデル設定 ⚙️", command=open_model_settings)
+
+api_plan_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_plan_frame.pack(fill=tk.X, pady=(0, 2))
+ttk.Label(api_plan_frame, text="APIプラン:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+rb_free = ttk.Radiobutton(api_plan_frame, text="無料枠 (安全な通信間隔で実行)", variable=api_plan_var, value="free"); rb_free.pack(side=tk.LEFT, padx=(0, 15))
+rb_paid = ttk.Radiobutton(api_plan_frame, text="課金枠 (制限なしで高速実行)", variable=api_plan_var, value="paid"); rb_paid.pack(side=tk.LEFT)
 
 crop_frame = ttk.Frame(extract_frame, style="Card.TFrame"); crop_frame.pack(fill=tk.X, pady=(2, 0))
 ttk.Label(crop_frame, text="抽出範囲:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 btn_select_crop = ttk.Button(crop_frame, text="抽出範囲を選択", command=open_crop_selector); btn_select_crop.pack(side=tk.LEFT)
 btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, style="Warning.TButton"); btn_reset_crop.pack(side=tk.LEFT, padx=(5, 0))
 
-action_container = ttk.Frame(main_container); action_container.pack(fill=tk.BOTH, expand=True, pady=5)
+action_container = ttk.Frame(main_container, style="Main.TFrame"); action_container.pack(fill=tk.BOTH, expand=True, pady=2)
 action_container.columnconfigure(0, weight=1); action_container.columnconfigure(1, weight=1)
 
-pdf_action_frame = ttk.LabelFrame(action_container, text=" ✂️ PDF編集 ", style="Card.TLabelframe", padding=10); pdf_action_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-btn_merge = ttk.Button(pdf_action_frame, text="結合 (フォルダ)", command=lambda: safe_run(merge_pdfs), style="Primary.TButton"); btn_merge.pack(fill=tk.X, pady=4)
-btn_split = ttk.Button(pdf_action_frame, text="分割", command=lambda: safe_run(split_pdfs), style="Primary.TButton"); btn_split.pack(fill=tk.X, pady=4)
-btn_rotate = ttk.Button(pdf_action_frame, text="回転", command=lambda: safe_run(rotate_pdfs), style="Primary.TButton"); btn_rotate.pack(fill=tk.X, pady=4)
+pdf_action_frame = ttk.LabelFrame(action_container, text=" ✂️ PDF編集 ", style="Card.TLabelframe", padding=5); pdf_action_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+btn_merge = ttk.Button(pdf_action_frame, text="結合 (フォルダ)", command=lambda: safe_run(merge_pdfs, "PDF結合"), style="Primary.TButton"); btn_merge.pack(fill=tk.X, pady=2)
+btn_split = ttk.Button(pdf_action_frame, text="分割", command=lambda: safe_run(split_pdfs, "PDF分割"), style="Primary.TButton"); btn_split.pack(fill=tk.X, pady=2)
+btn_rotate = ttk.Button(pdf_action_frame, text="回転", command=lambda: safe_run(rotate_pdfs, "PDF回転"), style="Primary.TButton"); btn_rotate.pack(fill=tk.X, pady=2)
 
-data_action_frame = ttk.LabelFrame(action_container, text=" 📊 データ操作 ", style="Card.TLabelframe", padding=10); data_action_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-btn_extract = ttk.Button(data_action_frame, text="🚀 選択した抽出・変換を実行", command=run_selected_extraction, style="Danger.TButton"); btn_extract.pack(fill=tk.X, pady=(4, 10), ipady=6) 
-btn_aggregate = ttk.Button(data_action_frame, text="🧩 データ集約", command=lambda: safe_run(aggregate_only_task), style="Purple.TButton"); btn_aggregate.pack(fill=tk.X, pady=4)
+data_action_frame = ttk.LabelFrame(action_container, text=" 📊 データ操作 ", style="Card.TLabelframe", padding=5); data_action_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+btn_extract = ttk.Button(data_action_frame, text="🚀 選択した抽出・変換を実行", command=run_selected_extraction, style="Danger.TButton"); btn_extract.pack(fill=tk.X, pady=(2, 6), ipady=6) 
+btn_aggregate = ttk.Button(data_action_frame, text="🧩 データ集約", command=lambda: safe_run(aggregate_only_task, "データ集約"), style="Purple.TButton"); btn_aggregate.pack(fill=tk.X, pady=2)
+
+status_frame = ttk.Frame(main_container, style="Main.TFrame")
+status_frame.pack(fill=tk.X, pady=(2, 0))
+status_label = ttk.Label(status_frame, text="ステータス: 待機中", font=("Segoe UI", 10), foreground=MUTED_TEXT, background=BG_COLOR)
+status_label.pack(side=tk.LEFT, padx=5)
 
 update_ui()
 root.mainloop()
