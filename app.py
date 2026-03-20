@@ -42,6 +42,7 @@ API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
 # ==============================
 VERSION_HISTORY = """
 [ v1.12.0 ]
+- 【モデル設定機能】Gemini APIのモデルを選択できる設定画面を、分かりやすい表形式で追加しました。
 - 【アーキテクチャ刷新】機能ごとにモジュールを分割し、今後の拡張性を大幅に向上させました。
 - 【フォーマット追加】Word(.docx)、JSON、Markdown、SVG、TIFF、BMPでの抽出・変換に新しく対応しました。
 - 【データ集約の強化】指定したフォルダ内の無関係なファイルも含め、同一フォーマットのファイルをすべて集約対象とするように変更。
@@ -50,18 +51,8 @@ VERSION_HISTORY = """
 
 [ v1.11.0 ]
 - 【安定化】APIの接続制限による遅延を回避するため、Gemini複数領域抽出の通信を安定した直列処理へ戻しました。
-- 【安定化強化】Gemini APIのレートリミット(429エラー)対策として、リクエスト間の自動クールダウン(待機)と、Jitter(揺らぎ)を伴う再試行ロジックを実装。大量ページの連続処理時の安定性が劇的に向上しました。
+- 【安定化強化】Gemini APIのレートリミット(429エラー)対策として、リクエスト間の自動クールダウン(待機)と、Jitter(揺らぎ)を伴う再試行ロジックを実装。
 - 【UI改善】抽出範囲ボタンの表記をシンプルにし、「全体に戻す」リセットボタンを追加しました。
-
-[ v1.10.0 系 ]
-- 【レイアウト固定】アプリ起動時のウィンドウ表示位置を画面左上に固定。
-- 【スマートカラムマッピング】数値・分数の割合と桁数の整合性による自動列マッピング。
-- 【列の分割と1列化】複数領域を指定した場合、1つの領域＝1つの列として横並びで出力する機能。
-- 【ページごとの独立ファイル】複数ページPDFの処理時、1ページごとに個別のファイルとして出力。
-- 【ページ番号の自動付与】AI抽出データの先頭列に「現在のページ/総ページ数」を自動追加。
-- 【縦書き文字の自動結合】縦書きの文字が複数行に分割される問題を解消し、横書き1文に結合。
-- 【プレビュー拡大機能】抽出範囲のプレビュー画面に拡大・縮小ボタンとスクロールバーを追加。
-- 【集約順の適正化】データ集約時、ファイルの順番が「更新日時順」になるよう修正。
 """
 
 AI_HELP_TEXT = """
@@ -96,13 +87,6 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 2. 「tesseract-ocr-w64-setup...exe」など、最新の64bit版インストーラーをダウンロードして実行します。
 3. インストール中の「Choose Components」画面で、「Additional language data (download)」の中にある「Japanese」および「Japanese (vertical)」に必ずチェックを入れてください。
 4. インストール先は初期設定のまま（C:\\Program Files\\Tesseract-OCR）進めてください。
-
-───────────────────────────
-■ 抽出範囲の選択機能について
-───────────────────────────
-・「抽出範囲を選択」ボタンから、読み取ってほしい表の部分だけをドラッグして囲むことができます。
-・複数の範囲を囲んだ場合、それぞれの範囲のデータが「列」として横に並んで出力されます。
-・全体を抽出したい状態に戻すときは「全体に戻す」ボタンを押してください。
 """
 
 # ==============================
@@ -152,12 +136,27 @@ def get_api_key():
 def test_api_key_ui():
     key = api_key_var.get().strip()
     if not key: return messagebox.showwarning("警告", "APIキーが入力されていません。")
+    
     genai.configure(api_key=key)
+    model_name = gemini_model_var.get()
+    
     try:
-        genai.GenerativeModel("gemini-1.5-flash").generate_content("Test")
-        with open(API_KEY_FILE, "w", encoding="utf-8") as f: f.write(key)
-        messagebox.showinfo("認証成功！", "APIキーは正しく認識されました。")
-    except Exception as e: messagebox.showerror("通信エラー", f"APIキー確認中にエラーが発生しました。\n{e}")
+        # 現在選択されているモデルを利用してテストを実行
+        model = genai.GenerativeModel(model_name)
+        model.generate_content("Test")
+        
+        with open(API_KEY_FILE, "w", encoding="utf-8") as f: 
+            f.write(key)
+        messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\n現在選択中のモデル「{model_name}」は利用可能です！")
+        
+    except Exception as e:
+        err_str = str(e).lower()
+        if "404" in err_str or "not found" in err_str:
+            messagebox.showerror("モデル利用不可", f"エラー: 選択したモデル「{model_name}」を利用する権限がないか、存在しません。\n別のモデルを選択してください。\n\n詳細:\n{e}")
+        elif "429" in err_str or "quota" in err_str:
+            messagebox.showerror("利用枠超過", f"エラー: APIの利用枠（クォータ）を超過しています。\nしばらく待つか、課金設定（Paid Tier）を確認してください。\n\n詳細:\n{e}")
+        else:
+            messagebox.showerror("通信エラー", f"APIキーまたは通信に問題が発生しました。\n\n詳細:\n{e}")
 
 def show_message(msg, color=PRIMARY):
     def _task():
@@ -197,7 +196,8 @@ def run_task(func):
         options = {
             "rotate_deg": rotate_option.get(), "crop_regions": selected_crop_regions, "out_format": output_format_var.get(),
             "folder_name": os.path.basename(selected_folder) if selected_folder else "Merged",
-            "api_key": api_key_var.get().strip()
+            "api_key": api_key_var.get().strip(),
+            "models_to_try": [gemini_model_var.get()] if engine_var.get() == "Gemini" else []
         }
         func(files, save_dir, options, UIController())
         close_processing()
@@ -349,6 +349,56 @@ def reset_crop_regions():
     global selected_crop_regions; selected_crop_regions = []
     btn_select_crop.config(text="抽出範囲を選択")
 
+def open_model_settings():
+    win = tk.Toplevel(root)
+    win.title("Gemini API モデル設定")
+    win.geometry("820x450")
+    win.configure(bg=CARD_BG)
+    win.grab_set()
+    
+    lbl_title = ttk.Label(win, text="使用するAIモデルを選択してください", font=("Segoe UI", 12, "bold"), background=CARD_BG, foreground=PRIMARY)
+    lbl_title.pack(pady=(15, 10))
+    
+    list_frame = ttk.Frame(win, style="Card.TFrame")
+    list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+    
+    headers = ["選択", "モデル名", "無料枠 (Free Tier)", "課金枠 (Paid Tier)", "備考"]
+    widths = [60, 220, 120, 120, 250]
+    
+    # 修正: sticky="center" は無効なため、"" (デフォルトの中央配置)に変更しエラーを回避
+    for col, (h_text, w) in enumerate(zip(headers, widths)):
+        lbl = ttk.Label(list_frame, text=h_text, font=("Segoe UI", 9, "bold"), background=CARD_BG)
+        lbl.grid(row=0, column=col, sticky="w" if col in [1, 4] else "", padx=5, pady=(0, 10))
+        list_frame.grid_columnconfigure(col, minsize=w)
+    
+    ttk.Separator(list_frame, orient="horizontal").grid(row=1, column=0, columnspan=5, sticky="ew", pady=(0, 10))
+    
+    models = [
+        ("gemini-2.5-flash", "Gemini 2.5 Flash / Flash-Lite", "○", "○", "無料でも十分な回数利用可能。(標準推奨)"),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro", "○", "○", "無料枠では1分あたりの利用回数（RPM）に厳しい制限あり。"),
+        ("gemini-3.0-flash", "Gemini 3 Flash / 3.1 Flash-Lite", "○", "○", "最新世代の高速モデルも無料でテスト可能。"),
+        ("gemini-3.0-pro", "Gemini 3.1 Pro / 3 Pro", "×", "○", "課金設定が必須。最高の最高性能モデル。"),
+        ("gemini-3.1-flash-image", "Gemini 3.1 Flash Image など", "×", "○", "最新の画像生成などマルチモーダル特化モデルは課金必須。")
+    ]
+    
+    row_idx = 2
+    for val, name, free, paid, desc in models:
+        rb = ttk.Radiobutton(list_frame, variable=gemini_model_var, value=val)
+        rb.grid(row=row_idx, column=0, pady=6)
+        
+        ttk.Label(list_frame, text=name, font=("Segoe UI", 9, "bold"), background=CARD_BG).grid(row=row_idx, column=1, sticky="w", padx=5)
+        ttk.Label(list_frame, text=free, background=CARD_BG).grid(row=row_idx, column=2, padx=5)
+        ttk.Label(list_frame, text=paid, background=CARD_BG).grid(row=row_idx, column=3, padx=5)
+        ttk.Label(list_frame, text=desc, background=CARD_BG, wraplength=230).grid(row=row_idx, column=4, sticky="w", padx=5)
+        
+        row_idx += 1
+        ttk.Separator(list_frame, orient="horizontal").grid(row=row_idx, column=0, columnspan=5, sticky="ew", pady=2)
+        row_idx += 1
+
+    btn_frame = ttk.Frame(win, style="Card.TFrame")
+    btn_frame.pack(pady=(10, 20))
+    ttk.Button(btn_frame, text="設定して閉じる", command=win.destroy, style="Primary.TButton", width=15).pack()
+
 def select_files():
     global selected_files, selected_folder, current_mode
     files = filedialog.askopenfilenames(filetypes=[("すべての対応ファイル", "*.pdf;*.xlsx;*.csv;*.txt;*.json;*.md;*.docx"), ("PDF", "*.pdf")])
@@ -372,8 +422,19 @@ format_radiobuttons = {}
 def toggle_extraction_settings(*args):
     is_active = current_mode is not None
     for fmt, rb in format_radiobuttons.items(): rb.configure(state=tk.NORMAL if is_active else tk.DISABLED)
-    state_gemini = tk.NORMAL if (is_active and engine_var.get() == "Gemini") else tk.DISABLED
-    api_key_entry.configure(state=state_gemini); btn_api_test.configure(state=state_gemini)
+    
+    is_gemini = (is_active and engine_var.get() == "Gemini")
+    state_gemini = tk.NORMAL if is_gemini else tk.DISABLED
+    
+    api_key_entry.configure(state=state_gemini)
+    btn_api_test.configure(state=state_gemini)
+    
+    if engine_var.get() == "Gemini":
+        btn_model_config.pack(side=tk.LEFT, padx=(5, 0))
+        btn_model_config.configure(state=tk.NORMAL if is_active else tk.DISABLED)
+    else:
+        btn_model_config.pack_forget()
+        
     state_crop = tk.NORMAL if is_active else tk.DISABLED
     for child in crop_frame.winfo_children():
         if isinstance(child, ttk.Button) or isinstance(child, ttk.Label): child.configure(state=state_crop)
@@ -437,7 +498,9 @@ menubar.add_cascade(label="ヘルプ", menu=help_menu)
 root.config(menu=menubar)
 
 rotate_option, save_option = tk.IntVar(value=270), tk.IntVar(value=1)
-engine_var, output_format_var, api_key_var = tk.StringVar(value="Internal"), tk.StringVar(value="xlsx"), tk.StringVar(value=get_api_key() or "")
+engine_var, output_format_var = tk.StringVar(value="Internal"), tk.StringVar(value="xlsx")
+api_key_var = tk.StringVar(value=get_api_key() or "")
+gemini_model_var = tk.StringVar(value="gemini-2.5-flash")
 engine_var.trace("w", toggle_extraction_settings)
 
 main_container = ttk.Frame(root, padding=15); main_container.pack(fill=tk.BOTH, expand=True)
@@ -491,6 +554,7 @@ api_key_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_key_frame.pac
 ttk.Label(api_key_frame, text="[AI用] APIキー:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 api_key_entry = ttk.Entry(api_key_frame, textvariable=api_key_var, width=45, show="*"); api_key_entry.pack(side=tk.LEFT, padx=(0, 8))
 btn_api_test = ttk.Button(api_key_frame, text="テスト", command=test_api_key_ui, width=6); btn_api_test.pack(side=tk.LEFT)
+btn_model_config = ttk.Button(api_key_frame, text="モデル設定 ⚙️", command=open_model_settings)
 
 crop_frame = ttk.Frame(extract_frame, style="Card.TFrame"); crop_frame.pack(fill=tk.X, pady=(2, 0))
 ttk.Label(crop_frame, text="抽出範囲:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
