@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, sys, threading, re
+import os, sys, threading, re, json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
 import tkinter.scrolledtext as st
@@ -36,6 +36,7 @@ COLOR_PURPLE, COLOR_PURPLE_HOVER = "#6F42C1", "#59339D"
 
 USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
+SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json") # 設定保存用ファイル
 
 # ==============================
 # ヘルプ・履歴テキスト
@@ -94,6 +95,70 @@ selected_files, selected_folder, current_mode = [], "", None
 preset_save_dir, selected_crop_regions = [], []
 processing_popup, overall_label, overall_progress = None, None, None
 file_label, file_progress, cancelled = None, None, False
+
+# ==============================
+# 設定の保存・読み込み機能
+# ==============================
+def load_settings():
+    global preset_save_dir
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+            
+            if "rotate_option" in settings: rotate_option.set(settings["rotate_option"])
+            if "engine_var" in settings: engine_var.set(settings["engine_var"])
+            if "output_format_var" in settings: output_format_var.set(settings["output_format_var"])
+            if "api_key_var" in settings and settings["api_key_var"]: api_key_var.set(settings["api_key_var"])
+            if "api_plan_var" in settings: api_plan_var.set(settings["api_plan_var"])
+            
+            if "save_option" in settings: 
+                save_option.set(settings["save_option"])
+                if settings["save_option"] == 1:
+                    save_label.config(text="同じフォルダ")
+                elif settings["save_option"] == 2:
+                    if "preset_save_dir" in settings and settings["preset_save_dir"]:
+                        preset_save_dir = settings["preset_save_dir"]
+                        save_label.config(text=preset_save_dir)
+                    else:
+                        save_label.config(text="未選択")
+            
+            # ウィンドウサイズの復元 (最小サイズを下回らないように保護)
+            if "window_width" in settings and "window_height" in settings:
+                w = max(settings["window_width"], 760)
+                h = max(settings["window_height"], 650)
+                root.geometry(f"{w}x{h}")
+                
+        except Exception as e:
+            print(f"Failed to load settings: {e}")
+
+def save_settings():
+    # 最新のウィンドウサイズを正しく取得するために更新
+    root.update_idletasks()
+    
+    settings = {
+        "rotate_option": rotate_option.get(),
+        "save_option": save_option.get(),
+        "preset_save_dir": preset_save_dir,
+        "engine_var": engine_var.get(),
+        "output_format_var": output_format_var.get(),
+        "api_key_var": api_key_var.get().strip(),
+        "api_plan_var": api_plan_var.get(),
+        "window_width": root.winfo_width(),
+        "window_height": root.winfo_height()
+    }
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            
+        # 既存のAPIキーファイルにも書き込んでおく（互換性のため）
+        if settings["api_key_var"]:
+            with open(API_KEY_FILE, "w", encoding="utf-8") as f:
+                f.write(settings["api_key_var"])
+                
+        messagebox.showinfo("保存完了", "現在の選択項目を保存しました。\n次回起動時もこの設定が適用されます。")
+    except Exception as e:
+        messagebox.showerror("エラー", f"設定の保存に失敗しました。\n{e}")
 
 # ==============================
 # UI コントローラー & ヘルパー関数
@@ -584,7 +649,6 @@ for t, v in [("左（270°）", 270), ("上下（180°）", 180), ("右（90°�
 extract_frame = ttk.LabelFrame(main_container, text=" ⚙️ データ抽出・変換設定 ", style="Card.TLabelframe", padding=5); extract_frame.pack(fill=tk.X, pady=5)
 
 engine_frame = ttk.Frame(extract_frame, style="Card.TFrame"); engine_frame.pack(fill=tk.X, pady=(0, 2))
-# ★ Labelの幅を12に拡張し、文字がラジオボタンと重ならないように修正
 ttk.Label(engine_frame, text="① エンジン:", width=12, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 engine_inner = ttk.Frame(engine_frame, style="Card.TFrame"); engine_inner.pack(anchor="w", fill=tk.X)
 for text, val in [("Python標準ライブラリ (高速・オフライン)", "Internal"), ("Tesseract (ローカルOCR)", "Tesseract"), ("Gemini API (超高精度AI)", "Gemini")]:
@@ -593,7 +657,6 @@ for text, val in [("Python標準ライブラリ (高速・オフライン)", "In
 ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=6)
 
 format_frame = ttk.Frame(extract_frame, style="Card.TFrame"); format_frame.pack(fill=tk.X, pady=0)
-# ★ Labelの幅を12に拡張し、文字がラジオボタンと重ならないように修正
 ttk.Label(format_frame, text="② 出力形式:", width=12, background=CARD_BG, font=("Segoe UI", 10, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 
 formats_row1 = [("Excel (.xlsx)", "xlsx"), ("CSV (.csv)", "csv"), ("Text (.txt)", "txt"), ("JSON (.json)", "json"), ("Markdown (.md)", "md"), ("Word (.docx)", "docx")]
@@ -625,6 +688,12 @@ ttk.Label(crop_frame, text="抽出範囲:", width=14, background=CARD_BG, font=(
 btn_select_crop = ttk.Button(crop_frame, text="抽出範囲を選択", command=open_crop_selector); btn_select_crop.pack(side=tk.LEFT)
 btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, style="Warning.TButton"); btn_reset_crop.pack(side=tk.LEFT, padx=(5, 0))
 
+# --- 設定保存ボタンの追加 ---
+save_settings_frame = ttk.Frame(extract_frame, style="Card.TFrame")
+save_settings_frame.pack(fill=tk.X, pady=(10, 0))
+btn_save_settings = ttk.Button(save_settings_frame, text="💾 現在の選択項目を保存", command=save_settings)
+btn_save_settings.pack(side=tk.RIGHT)
+
 action_container = ttk.Frame(main_container, style="Main.TFrame"); action_container.pack(fill=tk.BOTH, expand=True, pady=2)
 action_container.columnconfigure(0, weight=1); action_container.columnconfigure(1, weight=1)
 
@@ -642,5 +711,8 @@ status_frame.pack(fill=tk.X, pady=(2, 0))
 status_label = ttk.Label(status_frame, text="ステータス: 待機中", font=("Segoe UI", 10), foreground=MUTED_TEXT, background=BG_COLOR)
 status_label.pack(side=tk.LEFT, padx=5)
 
+# --- 起動時の設定読み込みとUI更新 ---
+load_settings()
 update_ui()
+
 root.mainloop()
