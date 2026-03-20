@@ -106,7 +106,7 @@ def extract_tesseract_task(files, save_dir, options, ui):
                         f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
                         for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
             elif out_format == "docx":
-                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。\nコマンドプロンプトで pip install python-docx を実行してください。")
+                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
                 doc_out = Document()
                 if final_data:
                     table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
@@ -176,9 +176,7 @@ def extract_gemini_task(files, save_dir, options, ui):
         prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
         generation_config = None
 
-    # 【高速化・並列処理の制御基盤 (改善版)】
     api_plan = options.get("api_plan", "free")
-    
     request_timestamps = []
     last_request_time = [0.0]
     rate_limit_lock = threading.Lock()
@@ -190,12 +188,11 @@ def extract_gemini_task(files, save_dir, options, ui):
         BATCH_SIZE = 5
     else:
         MAX_RPM = 1000  
-        MIN_REQUEST_INTERVAL = 0.05  # リクエスト間隔をさらに短縮
-        max_workers = 10  # 並行スレッド数を倍増させ劇的に高速化
-        BATCH_SIZE = 10   # まとめて処理するページ数を増加
+        MIN_REQUEST_INTERVAL = 0.05  
+        max_workers = 10  
+        BATCH_SIZE = 10   
 
     def process_api_request(img, page_num, region_idx, num_regions):
-        """マルチスレッドで実行される個別のAPIリクエスト処理"""
         max_retries = 8
         extracted_text, success, last_error = "", False, ""
         
@@ -234,7 +231,6 @@ def extract_gemini_task(files, save_dir, options, ui):
                         
                     request_timestamps.append(expected_run_time)
 
-                # ロック外で各スレッドが並行して待機を実行（直列化の解消）
                 total_wait = wait_t + rpm_wait_t
                 if total_wait > 0:
                     ui.set_indeterminate(f"通信間隔調整中... (約 {total_wait:.1f}秒)")
@@ -367,7 +363,16 @@ def extract_gemini_task(files, save_dir, options, ui):
                     if success:
                         if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                             try:
-                                data = json.loads(extracted_text)
+                                # JSONのパースエラーを回避するためのクリーニング処理
+                                clean_text = extracted_text.strip()
+                                # Markdownのバッククォートが返ってきた場合を除去する処理(切断回避のため結合形式で記述)
+                                md_fence = "`" * 3
+                                if clean_text.startswith(md_fence + "json"): clean_text = clean_text[7:]
+                                if clean_text.startswith(md_fence): clean_text = clean_text[3:]
+                                if clean_text.endswith(md_fence): clean_text = clean_text[:-3]
+                                clean_text = clean_text.strip()
+                                
+                                data = json.loads(clean_text)
                                 if crop_regions:
                                     rows = data.get("rows", [])
                                     if not rows and isinstance(data, list): rows = data
@@ -462,7 +467,7 @@ def extract_gemini_task(files, save_dir, options, ui):
         doc.close(); gc.collect()
         ui.set_determinate(total_pages, total_pages, "完了")
 
-def aggregate_only_task(files, save_dir, options, ui):
+def aggregate_local_task(files, save_dir, options, ui):
     out_format = options.get("out_format", "xlsx")
     search_ext = "xlsx" if out_format in ["jpg", "png", "dxf", "svg", "tiff", "bmp"] else out_format
     
@@ -616,3 +621,179 @@ def aggregate_only_task(files, save_dir, options, ui):
         elif search_ext == "txt" and agg_texts:
             with open(os.path.join(save_dir, "データ集約.txt"), "w", encoding="utf-8") as f_out: 
                 f_out.write("\n\n".join(agg_texts))
+
+def aggregate_gemini_task(files, save_dir, options, ui):
+    out_format = options.get("out_format", "xlsx")
+    search_ext = "xlsx" if out_format in ["jpg", "png", "dxf", "svg", "tiff", "bmp"] else out_format
+    
+    if not files: raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
+
+    target_files_set = set()
+    for f in files:
+        if os.path.isdir(f):
+            try:
+                for fn in os.listdir(f):
+                    if fn.lower().endswith(f".{search_ext}") and "データ集約" not in fn and not fn.startswith("~$"):
+                        target_files_set.add(os.path.abspath(os.path.join(f, fn)))
+            except Exception: pass
+        elif os.path.isfile(f):
+            if f.lower().endswith(f".{search_ext}") and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
+                target_files_set.add(os.path.abspath(f))
+
+    target_files = sorted(list(target_files_set))
+    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な (.{search_ext}) データが見つかりません。")
+
+    api_key = options.get("api_key", "")
+    if not api_key: raise Exception("Gemini APIキーが設定されていません。「データ抽出・変換設定」でAPIキーを入力してください。")
+    genai.configure(api_key=api_key)
+    models_to_try = options.get("models_to_try", ["gemini-2.5-flash"])
+    model_name = models_to_try[0]
+
+    all_file_contents = []
+    
+    for i, f in enumerate(target_files, 1):
+        if ui.is_cancelled(): return
+        ui.update_overall(i, len(target_files), f"データを読み込み中... ( {i} / {len(target_files)} ファイル )")
+        ui.set_determinate(50, 100, f"読み込み: {os.path.basename(f)}")
+        
+        fname = os.path.basename(f)
+        fname = re.sub(r'(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + search_ext + '$', '.pdf', fname)
+        
+        file_data_str = f"--- [元ファイル名: {fname}] ---\n"
+        
+        try:
+            if search_ext == "xlsx":
+                wb = openpyxl.load_workbook(f, data_only=True)
+                for sheet in wb.sheetnames:
+                    for r in wb[sheet].iter_rows(values_only=True):
+                        if r and any(c is not None for c in r):
+                            file_data_str += "\t".join([str(c).replace('\n', ' ') if c is not None else "" for c in r]) + "\n"
+                wb.close()
+            elif search_ext == "csv":
+                with open(f, "r", encoding="utf-8-sig") as f_in:
+                    for r in csv.reader(f_in):
+                        if any(c.strip() != "" for c in r):
+                            file_data_str += "\t".join([c.replace('\n', ' ') for c in r]) + "\n"
+            elif search_ext == "json":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    try:
+                        rows = json.load(f_in)
+                        if isinstance(rows, list):
+                            for r in rows:
+                                if isinstance(r, list): file_data_str += "\t".join([str(c).replace('\n', ' ') for c in r]) + "\n"
+                                else: file_data_str += str(r).replace('\n', ' ') + "\n"
+                    except: pass
+            elif search_ext == "md":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    for line in f_in:
+                        line = line.strip()
+                        if line.startswith('|') and line.endswith('|'):
+                            cols = [c.strip().replace('<br>', ' ') for c in line[1:-1].split('|')]
+                            if all(c.strip() == '-' * len(c.strip()) or c.strip() == '' or ':' in c for c in cols): continue
+                            file_data_str += "\t".join(cols) + "\n"
+            elif search_ext == "docx":
+                if Document is not None:
+                    doc_in = Document(f)
+                    for table in doc_in.tables:
+                        for row in table.rows:
+                            file_data_str += "\t".join([cell.text.replace('\n', ' ') for cell in row.cells]) + "\n"
+            elif search_ext == "txt":
+                with open(f, "r", encoding="utf-8") as f_in:
+                    file_data_str += f_in.read() + "\n"
+        except Exception as e:
+            print(f"Read Error in {f}: {e}")
+            
+        all_file_contents.append(file_data_str)
+        ui.set_determinate(100, 100, "完了"); time.sleep(0.05)
+        
+    if not all_file_contents:
+        raise Exception("集約するデータが抽出できませんでした。")
+
+    combined_text = "\n".join(all_file_contents)
+    
+    if ui.is_cancelled(): return
+    ui.set_indeterminate("Gemini APIでデータを統合・集約中...")
+
+    prompt = """
+    あなたは優秀なデータアナリストです。
+    提供された複数のファイルの表データを解析し、意味的に同じ列を自動的に統合して、1つのマスターデータ（JSON形式）を作成してください。
+
+    【ルール - 絶対厳守】
+    1. 各行の最初の列には必ず「元ファイル名」という列を設け、そのデータがどのファイルから来たかを明記してください。
+    2. 列名が異なっていても（例:「氏名」と「名前」、「単価」と「金額」など）、文脈から同じ意味の列と判断できる場合は同じ列に結合してください。
+    3. JSONデータ以外は絶対に出力しないでください（マークダウンの ```json なども不要です）。
+    4. 以下の形式に厳密に従ってください。
+    {
+      "header": ["元ファイル名", "統合列名1", "統合列名2", ...],
+      "rows": [
+        ["ファイルA.pdf", "データ1", "データ2", ...],
+        ["ファイルB.pdf", "データ1", "", ...]
+      ]
+    }
+    """
+
+    generation_config = {"response_mime_type": "application/json"}
+    
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content([prompt, combined_text], generation_config=generation_config)
+        if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
+        
+        # JSONパースエラーを回避するための保護処理(切断回避のため結合形式で記述)
+        result_text = response.text.strip()
+        md_fence = "`" * 3
+        if result_text.startswith(md_fence + "json"): result_text = result_text[7:]
+        if result_text.startswith(md_fence): result_text = result_text[3:]
+        if result_text.endswith(md_fence): result_text = result_text[:-3]
+        result_text = result_text.strip()
+        
+        data = json.loads(result_text)
+        
+        final_header = data.get("header", [])
+        final_rows = data.get("rows", [])
+        
+        if not final_header or not final_rows:
+            raise Exception("AIからの応答が不正な形式でした。")
+            
+        final_data = [final_header] + final_rows
+        
+    except Exception as e:
+        raise Exception(f"Gemini APIによる集約に失敗しました: {e}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
+
+    if ui.is_cancelled(): return
+    ui.set_indeterminate("集約データを保存中...")
+
+    if search_ext in ["xlsx", "csv", "json", "md", "docx"]:
+        apply_text_inheritance(final_data)
+        
+        if search_ext == "xlsx":
+            wb = Workbook(); ws = wb.active; ws.title = "集約データ"
+            for r_idx, r_data in enumerate(final_data, 1):
+                for c_idx, val in enumerate(r_data, 1): 
+                    ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
+            auto_adjust_excel_column_width(ws); wb.save(os.path.join(save_dir, "データ集約.xlsx"))
+        elif search_ext == "csv":
+            with open(os.path.join(save_dir, "データ集約.csv"), "w", encoding="utf-8-sig", newline="") as f_out: 
+                csv.writer(f_out).writerows(final_data)
+        elif search_ext == "json":
+            with open(os.path.join(save_dir, "データ集約.json"), "w", encoding="utf-8") as f_out:
+                json.dump(final_data, f_out, ensure_ascii=False, indent=2)
+        elif search_ext == "md":
+            with open(os.path.join(save_dir, "データ集約.md"), "w", encoding="utf-8") as f_out:
+                f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
+                f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
+                for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
+        elif search_ext == "docx":
+            if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
+            doc_out = Document()
+            table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
+            table.style = 'Table Grid'
+            for r_idx, row_data in enumerate(final_data):
+                row_cells = table.rows[r_idx].cells
+                for c_idx, val in enumerate(row_data):
+                    if c_idx < len(row_cells):
+                        row_cells[c_idx].text = str(val)
+            doc_out.save(os.path.join(save_dir, "データ集約.docx"))
+    elif search_ext == "txt":
+        with open(os.path.join(save_dir, "データ集約.txt"), "w", encoding="utf-8") as f_out: 
+            f_out.write("\n\n".join(all_file_contents))
