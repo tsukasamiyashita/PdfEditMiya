@@ -21,7 +21,7 @@ from ai_engine import (
 # 基本設定 & カラーパレット
 # ==============================
 APP_TITLE, VERSION = "PdfEditMiya", "v2.0.1"
-WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750  # すべてのボタンが収まる適切な高さに調整
+WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -36,27 +36,27 @@ COLOR_PURPLE, COLOR_PURPLE_HOVER = "#6F42C1", "#59339D"
 
 USER_HOME = os.path.expanduser("~")
 API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
-SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json") # 設定保存用ファイル
+SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json") 
 
 # ==============================
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
 [ v2.0.1 ]
+- 【機能追加】API詳細設定画面を実装し、Gemini APIのモデルやRPM（1分あたりのリクエスト数）制限を「無料枠」と「課金枠」それぞれ独立して設定・保持できるようになりました。
+- 【UI改善】API詳細設定画面に「設定を適用して閉じる」「キャンセル」ボタンを追加し、×ボタンで閉じた場合は変更が破棄されるように直感的なUIへ改善しました。
+- 【UI改善】ファイル・フォルダが未選択の状態でも、出力形式やAPI詳細設定を事前に変更できるようにグレーアウトを解除しました。
+- 【機能改善】「実行プランの選択」と「設定タブの表示」を分離し、選択状態を維持したまま各プランの設定を自由に確認・編集できるようになりました。
+- 【機能追加】無料枠/課金枠やモデルに応じた「推奨RPM」にワンクリックで戻せるデフォルト復元ボタンを追加しました。
 - 【機能追加】古いExcel形式 (.xls, .xlsm) のデータ集約処理に正式対応しました。
-- 【高速化】Gemini APIでのクロップ（範囲抽出）時、複数領域を1回のリクエストで同時解析するように変更し、大幅な高速化を実現しました。
 - 【機能改善】「フォルダを選択」からのデータ集約時、異なる文字コード（Shift_JISなど）のCSV・テキストファイルを自動判定して読み込むように改善しました。
+- 【高速化】Gemini APIでのクロップ（範囲抽出）時、複数領域を1回のリクエストで同時解析するように変更し、大幅な高速化を実現しました。
 
 [ v2.0.0 ]
 - 【UI改善】初期起動時にすべてのボタンが確実に表示されるよう、ウィンドウサイズを最適化しました。
-- 【UI改善】「①エンジン」と「②出力形式」の文字がラジオボタンと重ならないようにレイアウトを修正しました。
 - 【機能追加】処理中に安全に停止できる「処理を中止」ボタンを追加しました。
 - 【機能追加】メイン画面下部に現在の処理状況がわかる「ステータス表示」を追加しました。
-- 【UI改善】「①エンジン」と「②出力形式」の間に区切り線を追加し、設定項目の境界を分かりやすくしました。
 - 【高速化】Gemini APIの課金枠選択時に最大10スレッドの完全な並行処理を実現し、劇的な処理速度の向上を達成しました。
-- 【UI改善】メイン画面全体にスクロール機能を実装し、レスポンシブに対応しました。
-- 【機能追加】Gemini API利用時に「無料枠」と「課金枠」のプラン選択機能を追加しました。
-- 【UI改善】入力したAPIキーを表示して確認・コピーできるトグルボタンと、右クリックでの「貼り付け(ペースト)」に対応しました。
 """
 
 AI_HELP_TEXT = """
@@ -78,7 +78,7 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 3. 画面左上の「Create API key」ボタンを押します。
 4. 「Create API key in new project」を選択します。
 5. 発行された長い英数字の文字列（APIキー）をコピーします。
-6. 本アプリの「APIキー」入力枠内で右クリックして貼り付け、「テスト」ボタンを押してください。
+6. 本アプリの「詳細設定」ボタンを押し、開いた画面の「APIキー」欄で右クリックして貼り付け、「テスト」ボタンを押してください。
 
 ───────────────────────────
 ■ Tesseract を使う場合（オフライン・簡易抽出）
@@ -114,8 +114,23 @@ def load_settings():
             if "rotate_option" in settings: rotate_option.set(settings["rotate_option"])
             if "engine_var" in settings: engine_var.set(settings["engine_var"])
             if "output_format_var" in settings: output_format_var.set(settings["output_format_var"])
-            if "api_key_var" in settings and settings["api_key_var"]: api_key_var.set(settings["api_key_var"])
             if "api_plan_var" in settings: api_plan_var.set(settings["api_plan_var"])
+            
+            # 互換性を考慮した個別設定の読み込み
+            if "api_key_free_var" in settings: api_key_free_var.set(settings["api_key_free_var"])
+            elif "api_key_var" in settings: api_key_free_var.set(settings["api_key_var"])
+            
+            if "api_key_paid_var" in settings: api_key_paid_var.set(settings["api_key_paid_var"])
+            elif "api_key_var" in settings: api_key_paid_var.set(settings["api_key_var"])
+
+            if "gemini_model_free_var" in settings: gemini_model_free_var.set(settings["gemini_model_free_var"])
+            elif "gemini_model_var" in settings: gemini_model_free_var.set(settings["gemini_model_var"])
+
+            if "gemini_model_paid_var" in settings: gemini_model_paid_var.set(settings["gemini_model_paid_var"])
+            elif "gemini_model_var" in settings: gemini_model_paid_var.set(settings["gemini_model_var"])
+
+            if "api_rpm_free_var" in settings: api_rpm_free_var.set(settings["api_rpm_free_var"])
+            if "api_rpm_paid_var" in settings: api_rpm_paid_var.set(settings["api_rpm_paid_var"])
             
             if "save_option" in settings: 
                 save_option.set(settings["save_option"])
@@ -128,7 +143,6 @@ def load_settings():
                     else:
                         save_label.config(text="未選択")
             
-            # ウィンドウサイズの復元 (最小サイズを下回らないように保護)
             if "window_width" in settings and "window_height" in settings:
                 w = max(settings["window_width"], 760)
                 h = max(settings["window_height"], 650)
@@ -138,17 +152,20 @@ def load_settings():
             print(f"Failed to load settings: {e}")
 
 def save_settings():
-    # 最新のウィンドウサイズを正しく取得するために更新
     root.update_idletasks()
-    
     settings = {
         "rotate_option": rotate_option.get(),
         "save_option": save_option.get(),
         "preset_save_dir": preset_save_dir,
         "engine_var": engine_var.get(),
         "output_format_var": output_format_var.get(),
-        "api_key_var": api_key_var.get().strip(),
         "api_plan_var": api_plan_var.get(),
+        "api_key_free_var": api_key_free_var.get().strip(),
+        "api_key_paid_var": api_key_paid_var.get().strip(),
+        "gemini_model_free_var": gemini_model_free_var.get(),
+        "gemini_model_paid_var": gemini_model_paid_var.get(),
+        "api_rpm_free_var": api_rpm_free_var.get(),
+        "api_rpm_paid_var": api_rpm_paid_var.get(),
         "window_width": root.winfo_width(),
         "window_height": root.winfo_height()
     }
@@ -156,10 +173,11 @@ def save_settings():
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
             
-        # 既存のAPIキーファイルにも書き込んでおく（互換性のため）
-        if settings["api_key_var"]:
+        plan = api_plan_var.get()
+        current_key = api_key_free_var.get().strip() if plan == "free" else api_key_paid_var.get().strip()
+        if current_key:
             with open(API_KEY_FILE, "w", encoding="utf-8") as f:
-                f.write(settings["api_key_var"])
+                f.write(current_key)
                 
         messagebox.showinfo("保存完了", "現在の選択項目を保存しました。\n次回起動時もこの設定が適用されます。")
     except Exception as e:
@@ -204,17 +222,10 @@ def get_api_key():
         with open(API_KEY_FILE, "r", encoding="utf-8") as f: return f.read().strip()
     return None
 
-def toggle_api_key_show():
-    if api_key_entry.cget('show') == '*':
-        api_key_entry.configure(show='')
-        btn_api_check.configure(text="隠す")
-    else:
-        api_key_entry.configure(show='*')
-        btn_api_check.configure(text="確認")
-
-def show_context_menu(event):
+def show_context_menu(event, target_widget=None):
+    widget = target_widget if target_widget else event.widget
     menu = Menu(root, tearoff=0)
-    menu.add_command(label="貼り付け", command=lambda: paste_to_entry(event.widget))
+    menu.add_command(label="貼り付け", command=lambda: paste_to_entry(widget))
     menu.post(event.x_root, event.y_root)
 
 def paste_to_entry(widget):
@@ -224,40 +235,6 @@ def paste_to_entry(widget):
         except tk.TclError: pass
         widget.insert(tk.INSERT, text)
     except tk.TclError: pass
-
-def test_api_key_ui():
-    key = api_key_var.get().strip()
-    if not key: return messagebox.showwarning("警告", "APIキーが入力されていません。")
-    
-    genai.configure(api_key=key)
-    model_name = gemini_model_var.get()
-    
-    try:
-        model = genai.GenerativeModel(model_name)
-        model.generate_content("Test")
-        
-        with open(API_KEY_FILE, "w", encoding="utf-8") as f: 
-            f.write(key)
-        messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\nAIモデル「{model_name}」による通信は正常です！")
-        
-    except Exception as e:
-        err_str = str(e).lower()
-        if "404" in err_str or "not found" in err_str:
-            messagebox.showerror("モデル利用不可", f"エラー: モデル「{model_name}」が存在しないか、利用する権限がありません。\n\n詳細:\n{e}")
-        elif "429" in err_str or "quota" in err_str:
-            msg = f"エラー: APIの利用枠（クォータ）を超過しています。\n\n"
-            m = re.search(r'retry in ([\d\.]+)s', err_str)
-            if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
-            if m:
-                wait_sec = int(float(m.group(1)))
-                msg += f"⚠️ Googleのバースト制限です。約 {wait_sec} 秒後に利用枠が回復します。\n表示された秒数だけ待機してから再度テストしてください。\n\n"
-            else:
-                if "perday" in err_str.lower(): msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n翌日になるまで待つか、課金設定（Paid Tier）を確認してください。\n\n"
-                else: msg += "⚠️ APIの無料枠制限に達しました。\n約1分ほど待ってから再度テストするか、課金設定をご確認ください。\n\n"
-            msg += f"詳細:\n{e}"
-            messagebox.showerror("利用枠超過", msg)
-        else:
-            messagebox.showerror("通信エラー", f"APIキーまたは通信に問題が発生しました。\n\n詳細:\n{e}")
 
 def show_message(msg, color=PRIMARY):
     def _task():
@@ -283,8 +260,9 @@ def show_processing(total_files=1):
     
     engine_name = engine_var.get()
     if engine_name == "Gemini":
-        model_name = gemini_model_var.get()
-        engine_text = f"使用エンジン: Gemini API ( {model_name} )"
+        plan = api_plan_var.get()
+        model_name = gemini_model_free_var.get() if plan == "free" else gemini_model_paid_var.get()
+        engine_text = f"使用エンジン: Gemini API ( {model_name} / {plan.capitalize()} )"
     elif engine_name == "Tesseract":
         engine_text = "使用エンジン: Tesseract (ローカルOCR)"
     else:
@@ -323,12 +301,19 @@ def run_task(func, task_name):
         files = selected_files if current_mode == "file" else ([os.path.join(selected_folder, f) for f in os.listdir(selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))] if selected_folder else [])
         if not files: return
         save_dir = os.path.dirname(files[0]) if save_option.get() == 1 else preset_save_dir
+        
+        plan = api_plan_var.get()
+        api_key = api_key_free_var.get().strip() if plan == "free" else api_key_paid_var.get().strip()
+        model = gemini_model_free_var.get() if plan == "free" else gemini_model_paid_var.get()
+        rpm = api_rpm_free_var.get() if plan == "free" else api_rpm_paid_var.get()
+        
         options = {
             "rotate_deg": rotate_option.get(), "crop_regions": selected_crop_regions, "out_format": output_format_var.get(),
             "folder_name": os.path.basename(selected_folder) if selected_folder else "Merged",
-            "api_key": api_key_var.get().strip(),
-            "models_to_try": [gemini_model_var.get()] if engine_var.get() == "Gemini" else [],
-            "api_plan": api_plan_var.get()
+            "api_key": api_key,
+            "models_to_try": [model] if engine_var.get() == "Gemini" else [],
+            "api_plan": plan,
+            "api_rpm": rpm
         }
         func(files, save_dir, options, UIController())
         close_processing()
@@ -381,8 +366,229 @@ def run_selected_extraction():
             return
     elif engine == "Tesseract": safe_run(extract_tesseract_task, task_name)
     elif engine == "Gemini":
-        if not api_key_var.get().strip(): return messagebox.showerror("エラー", "Gemini APIキーを入力してください。")
+        plan = api_plan_var.get()
+        api_key = api_key_free_var.get().strip() if plan == "free" else api_key_paid_var.get().strip()
+        if not api_key: 
+            return messagebox.showerror("エラー", f"Gemini APIキー({plan.capitalize()}枠用)を入力してください。\n「⚙️ 詳細設定」ボタンから設定できます。")
         safe_run(extract_gemini_task, task_name)
+
+# ==============================
+# API詳細設定ダイアログ
+# ==============================
+def open_api_settings_dialog():
+    dialog = tk.Toplevel(root)
+    dialog.title("⚙️ AI詳細設定 (Gemini API)")
+    dialog.geometry("700x680")  # 高さを広げてボタンが見切れないように修正
+    dialog.configure(bg=BG_COLOR)
+    dialog.grab_set()
+    
+    x = root.winfo_x() + (WINDOW_WIDTH // 2) - 350
+    y = root.winfo_y() + (WINDOW_HEIGHT // 2) - 340  
+    dialog.geometry(f"+{x}+{y}")
+
+    # --- ダイアログを開いた時点の値をバックアップ ---
+    original_values = {
+        "plan": api_plan_var.get(),
+        "key_free": api_key_free_var.get(),
+        "key_paid": api_key_paid_var.get(),
+        "model_free": gemini_model_free_var.get(),
+        "model_paid": gemini_model_paid_var.get(),
+        "rpm_free": api_rpm_free_var.get(),
+        "rpm_paid": api_rpm_paid_var.get()
+    }
+
+    def apply_and_close():
+        # Tkinterのvarは既に更新されているため、そのまま閉じることで設定を完了する
+        dialog.destroy()
+
+    def has_changes():
+        if api_plan_var.get() != original_values["plan"]: return True
+        if api_key_free_var.get() != original_values["key_free"]: return True
+        if api_key_paid_var.get() != original_values["key_paid"]: return True
+        if gemini_model_free_var.get() != original_values["model_free"]: return True
+        if gemini_model_paid_var.get() != original_values["model_paid"]: return True
+        if api_rpm_free_var.get() != original_values["rpm_free"]: return True
+        if api_rpm_paid_var.get() != original_values["rpm_paid"]: return True
+        return False
+
+    def cancel_and_close():
+        if has_changes():
+            if not messagebox.askyesno("確認", "変更が適用されていません。\n破棄して設定画面を閉じますか？", parent=dialog):
+                return # 「いいえ」の場合は閉じない
+                
+        # キャンセルされた場合はバックアップから値を復元する
+        api_plan_var.set(original_values["plan"])
+        api_key_free_var.set(original_values["key_free"])
+        api_key_paid_var.set(original_values["key_paid"])
+        gemini_model_free_var.set(original_values["model_free"])
+        gemini_model_paid_var.set(original_values["model_paid"])
+        api_rpm_free_var.set(original_values["rpm_free"])
+        api_rpm_paid_var.set(original_values["rpm_paid"])
+        dialog.destroy()
+
+    # 右上の×ボタンが押された時の挙動をキャンセル処理にする
+    dialog.protocol("WM_DELETE_WINDOW", cancel_and_close)
+
+    lbl_title = ttk.Label(dialog, text="Gemini API 詳細設定", font=("Segoe UI", 16, "bold"), background=BG_COLOR, foreground=PRIMARY)
+    lbl_title.pack(pady=(15, 10))
+
+    # --- 実行プランの選択 ---
+    plan_frame = ttk.LabelFrame(dialog, text=" 実行プランの選択 ", style="Card.TLabelframe", padding=10)
+    plan_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+    ttk.Label(plan_frame, text="データ抽出や集約時に【実際に使用するプラン】を選んでください。\n※下のタブは設定を確認・編集するための画面であり、タブを切り替えても実行プランは変更されません。", background=CARD_BG, foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 5))
+    
+    plan_inner = ttk.Frame(plan_frame, style="Card.TFrame")
+    plan_inner.pack(anchor="w")
+    
+    notebook = ttk.Notebook(dialog)
+    tab_free = ttk.Frame(notebook, style="Main.TFrame")
+    tab_paid = ttk.Frame(notebook, style="Main.TFrame")
+
+    rb_free = ttk.Radiobutton(plan_inner, text="無料枠 (Free Tier) - 制限あり・コスト0", variable=api_plan_var, value="free")
+    rb_free.pack(side=tk.LEFT, padx=(0, 20))
+    rb_paid = ttk.Radiobutton(plan_inner, text="課金枠 (Paid Tier) - 制限緩和・高速処理", variable=api_plan_var, value="paid")
+    rb_paid.pack(side=tk.LEFT)
+
+    # --- 個別設定タブの構築 ---
+    notebook.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+    notebook.add(tab_free, text=" 🟢 無料枠 (Free Tier) の設定 ")
+    notebook.add(tab_paid, text=" 🔵 課金枠 (Paid Tier) の設定 ")
+
+    models = [
+        ("Gemini 2.5 Flash (高速・万能 / 推奨)", "gemini-2.5-flash"),
+        ("Gemini 2.5 Pro (主力・高精度)", "gemini-2.5-pro"),
+        ("Gemini 2.5 Flash-Lite (最軽量・低コスト)", "gemini-2.5-flash-8b"),
+        ("Gemini 3.1 Pro Preview (次世代プレビュー)", "gemini-3.1-pro-preview"),
+        ("Gemini 3.0 Flash Preview (次世代プレビュー)", "gemini-3.0-flash-preview")
+    ]
+
+    def build_tab(parent_tab, plan_type):
+        is_free = (plan_type == "free")
+        key_var = api_key_free_var if is_free else api_key_paid_var
+        model_var = gemini_model_free_var if is_free else gemini_model_paid_var
+        rpm_var = api_rpm_free_var if is_free else api_rpm_paid_var
+        
+        # ① APIキー
+        key_frame = ttk.LabelFrame(parent_tab, text=" ① APIキー ", style="Card.TLabelframe", padding=10)
+        key_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(key_frame, text=f"Google AI Studioで取得した {plan_type.capitalize()} 用のAPIキー:", background=CARD_BG).pack(anchor="w", pady=(0, 5))
+        key_inner = ttk.Frame(key_frame, style="Card.TFrame")
+        key_inner.pack(fill=tk.X)
+        
+        entry_key = ttk.Entry(key_inner, textvariable=key_var, width=42, show="*")
+        entry_key.pack(side=tk.LEFT, padx=(0, 5))
+        entry_key.bind("<Button-3>", lambda e, widget=entry_key: show_context_menu(e, widget))
+        
+        btn_toggle = ttk.Button(key_inner, text="確認", width=6)
+        btn_toggle.pack(side=tk.LEFT, padx=(0, 5))
+        
+        def toggle_key(e=entry_key, b=btn_toggle):
+            if e.cget('show') == '*':
+                e.configure(show='')
+                b.configure(text="隠す")
+            else:
+                e.configure(show='*')
+                b.configure(text="確認")
+        btn_toggle.config(command=toggle_key)
+
+        def test_key(k_var=key_var, m_var=model_var):
+            key = k_var.get().strip()
+            if not key: return messagebox.showwarning("警告", "APIキーが入力されていません。", parent=dialog)
+            genai.configure(api_key=key)
+            model_name = m_var.get()
+            try:
+                model = genai.GenerativeModel(model_name)
+                model.generate_content("Test")
+                messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\nAIモデル「{model_name}」による通信は正常です！", parent=dialog)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "404" in err_str or "not found" in err_str:
+                    messagebox.showerror("モデル利用不可", f"エラー: モデル「{model_name}」が存在しないか、利用する権限がありません。\n詳細:\n{e}", parent=dialog)
+                elif "429" in err_str or "quota" in err_str:
+                    msg = f"エラー: APIの利用枠（クォータ）を超過しています。\n\n"
+                    m = re.search(r'retry in ([\d\.]+)s', err_str)
+                    if not m: m = re.search(r'seconds:\s*(\d+)', err_str, re.IGNORECASE | re.DOTALL)
+                    if m:
+                        wait_sec = int(float(m.group(1)))
+                        msg += f"⚠️ Googleのバースト制限です。約 {wait_sec} 秒後に利用枠が回復します。\n"
+                    else:
+                        if "perday" in err_str.lower() or "limit: 20" in err_str.lower(): msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n"
+                        else: msg += "⚠️ APIの制限に達しました。\n"
+                    messagebox.showerror("利用枠超過", msg, parent=dialog)
+                else:
+                    messagebox.showerror("通信エラー", f"APIキーまたは通信に問題が発生しました。\n詳細:\n{e}", parent=dialog)
+        
+        btn_test = ttk.Button(key_inner, text="テスト", command=test_key, width=6)
+        btn_test.pack(side=tk.LEFT)
+
+        # ② モデル設定
+        model_frame = ttk.LabelFrame(parent_tab, text=" ② 使用モデル ", style="Card.TLabelframe", padding=10)
+        model_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        model_inner = ttk.Frame(model_frame, style="Card.TFrame")
+        model_inner.pack(fill=tk.X)
+        
+        model_combo = ttk.Combobox(model_inner, values=[m[0] for m in models], state="readonly", width=42)
+        current_val = model_var.get()
+        for m in models:
+            if m[1] == current_val:
+                model_combo.set(m[0]); break
+        if not model_combo.get(): model_combo.set(models[0][0])
+                
+        def on_model_select(event, cb=model_combo, m_var=model_var):
+            selected_display = cb.get()
+            for m in models:
+                if m[0] == selected_display:
+                    m_var.set(m[1]); break
+        model_combo.bind("<<ComboboxSelected>>", on_model_select)
+        model_combo.pack(side=tk.LEFT)
+
+        # ③ RPM設定
+        rpm_frame = ttk.LabelFrame(parent_tab, text=" ③ 使用制限 (RPM) 設定 ", style="Card.TLabelframe", padding=10)
+        rpm_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(rpm_frame, text="1分間あたりの最大リクエスト回数（RPM: Requests Per Minute）", background=CARD_BG, foreground=MUTED_TEXT).pack(anchor="w", pady=(0, 5))
+        
+        rpm_inner = ttk.Frame(rpm_frame, style="Card.TFrame")
+        rpm_inner.pack(fill=tk.X, pady=(5, 10))
+        
+        ttk.Label(rpm_inner, text="RPM制限値:", width=12, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        spin_rpm = ttk.Spinbox(rpm_inner, from_=1, to=2000, textvariable=rpm_var, width=8)
+        spin_rpm.pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(rpm_inner, text="回 / 分", background=CARD_BG).pack(side=tk.LEFT)
+        
+        def reset_rpm(m_var=model_var, r_var=rpm_var, is_f=is_free):
+            model = m_var.get()
+            if is_f:
+                if "pro" in model: r_var.set(2)
+                else: r_var.set(12)
+            else:
+                if "pro" in model: r_var.set(150)
+                else: r_var.set(300)
+                    
+        btn_reset_rpm = ttk.Button(rpm_frame, text="🔄 このタブのプランとモデルに適したデフォルト値に戻す", command=reset_rpm)
+        btn_reset_rpm.pack(anchor="w")
+
+    build_tab(tab_free, "free")
+    build_tab(tab_paid, "paid")
+    
+    # 起動時に現在の実行プランに合わせたタブを初期表示する (1回のみ)
+    if api_plan_var.get() == "free":
+        notebook.select(tab_free)
+    else:
+        notebook.select(tab_paid)
+
+    # --- アクションボタン群 ---
+    btn_action_frame = ttk.Frame(dialog, style="Main.TFrame")
+    btn_action_frame.pack(pady=(10, 20))
+    
+    btn_cancel = ttk.Button(btn_action_frame, text="キャンセル", command=cancel_and_close, width=15)
+    btn_cancel.pack(side=tk.LEFT, padx=10)
+    
+    btn_apply = ttk.Button(btn_action_frame, text="設定を適用して閉じる", command=apply_and_close, style="Primary.TButton", width=25)
+    btn_apply.pack(side=tk.LEFT, padx=10)
+
 
 class CropSelector:
     def __init__(self, master, pdf_path):
@@ -517,22 +723,23 @@ def on_save_mode_change():
 format_radiobuttons = {}
 def toggle_extraction_settings(*args):
     is_active = current_mode is not None
-    for fmt, rb in format_radiobuttons.items(): rb.configure(state=tk.NORMAL if is_active else tk.DISABLED)
     
-    is_gemini = (is_active and engine_var.get() == "Gemini")
+    # 出力形式はファイル未選択でも常に有効（変更可能）にする
+    for fmt, rb in format_radiobuttons.items(): 
+        rb.configure(state=tk.NORMAL)
+    
+    # Gemini API詳細設定ボタンも、エンジンがGeminiなら常に有効にする
+    is_gemini = (engine_var.get() == "Gemini")
     state_gemini = tk.NORMAL if is_gemini else tk.DISABLED
     
-    api_key_entry.configure(state=state_gemini)
-    btn_api_check.configure(state=state_gemini)
-    btn_api_test.configure(state=state_gemini)
-    
-    for child in api_plan_frame.winfo_children():
-        if isinstance(child, ttk.Radiobutton) or isinstance(child, ttk.Label): 
-            child.configure(state=state_gemini)
+    if hasattr(sys.modules[__name__], 'btn_api_settings'):
+        btn_api_settings.configure(state=state_gemini)
         
+    # クロップ（抽出範囲）設定は対象ファイルが必要なので、ファイル選択時のみ有効にする
     state_crop = tk.NORMAL if is_active else tk.DISABLED
     for child in crop_frame.winfo_children():
-        if isinstance(child, ttk.Button) or isinstance(child, ttk.Label): child.configure(state=state_crop)
+        if isinstance(child, ttk.Button) or isinstance(child, ttk.Label): 
+            child.configure(state=state_crop)
 
 def update_ui():
     path_label.config(text="\n".join(selected_files) if current_mode == "file" else (f"フォルダ: {selected_folder}" if selected_folder else "未選択"))
@@ -566,7 +773,7 @@ def show_readme():
 # ==============================
 root = tk.Tk(); root.title(f"{APP_TITLE} {VERSION}")
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
-root.minsize(width=760, height=650) # ウィンドウの最小サイズを引き上げ、見切れを防止
+root.minsize(width=760, height=650) 
 root.configure(bg=BG_COLOR)
 
 style = ttk.Style(); style.theme_use("clam") if "clam" in style.theme_names() else None
@@ -600,13 +807,17 @@ root.config(menu=menubar)
 
 rotate_option, save_option = tk.IntVar(value=270), tk.IntVar(value=1)
 engine_var, output_format_var = tk.StringVar(value="Internal"), tk.StringVar(value="xlsx")
-api_key_var = tk.StringVar(value=get_api_key() or "")
-gemini_model_var = tk.StringVar(value="gemini-2.5-flash")
+
 api_plan_var = tk.StringVar(value="free")
+api_key_free_var = tk.StringVar(value=get_api_key() or "")
+api_key_paid_var = tk.StringVar(value=get_api_key() or "")
+gemini_model_free_var = tk.StringVar(value="gemini-2.5-flash")
+gemini_model_paid_var = tk.StringVar(value="gemini-2.5-flash")
+api_rpm_free_var = tk.IntVar(value=12)
+api_rpm_paid_var = tk.IntVar(value=300)
 
 engine_var.trace("w", toggle_extraction_settings)
 
-# 全体を覆うスクロール可能なキャンバス領域の構築
 main_outer = ttk.Frame(root)
 main_outer.pack(fill=tk.BOTH, expand=True)
 
@@ -631,7 +842,7 @@ root.bind_all("<MouseWheel>", _on_mousewheel)
 canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-# --- 以下、既存のUIコンポーネント群を main_container 内に配置 ---
+# --- UI コンポーネント群 ---
 title_frame = ttk.Frame(main_container, style="Main.TFrame"); title_frame.pack(fill=tk.X, pady=(0, 2))
 ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 20, "bold"), foreground=PRIMARY, background=BG_COLOR).pack(side=tk.LEFT)
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 12), foreground=MUTED_TEXT, background=BG_COLOR).pack(side=tk.LEFT, pady=(8, 0))
@@ -677,24 +888,17 @@ for text, val in formats_row2:
 
 ttk.Separator(extract_frame, orient="horizontal").pack(fill=tk.X, pady=6)
 
-api_key_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_key_frame.pack(fill=tk.X, pady=2)
-ttk.Label(api_key_frame, text="[AI用] APIキー:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
-api_key_entry = ttk.Entry(api_key_frame, textvariable=api_key_var, width=45, show="*"); api_key_entry.pack(side=tk.LEFT, padx=(0, 8))
-api_key_entry.bind("<Button-3>", show_context_menu)
-btn_api_check = ttk.Button(api_key_frame, text="確認", command=toggle_api_key_show, width=6); btn_api_check.pack(side=tk.LEFT, padx=(0, 5))
-btn_api_test = ttk.Button(api_key_frame, text="テスト", command=test_api_key_ui, width=6); btn_api_test.pack(side=tk.LEFT)
+api_settings_frame = ttk.Frame(extract_frame, style="Card.TFrame")
+api_settings_frame.pack(fill=tk.X, pady=2)
+ttk.Label(api_settings_frame, text="[AI用] API設定:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
+btn_api_settings = ttk.Button(api_settings_frame, text="⚙️ 詳細設定 (APIキー / モデル / 制限)", command=open_api_settings_dialog, style="Primary.TButton")
+btn_api_settings.pack(side=tk.LEFT)
 
-api_plan_frame = ttk.Frame(extract_frame, style="Card.TFrame"); api_plan_frame.pack(fill=tk.X, pady=(0, 2))
-ttk.Label(api_plan_frame, text="APIプラン:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
-rb_free = ttk.Radiobutton(api_plan_frame, text="無料枠 (安全な通信間隔で実行)", variable=api_plan_var, value="free"); rb_free.pack(side=tk.LEFT, padx=(0, 15))
-rb_paid = ttk.Radiobutton(api_plan_frame, text="課金枠 (制限なしで高速実行)", variable=api_plan_var, value="paid"); rb_paid.pack(side=tk.LEFT)
-
-crop_frame = ttk.Frame(extract_frame, style="Card.TFrame"); crop_frame.pack(fill=tk.X, pady=(2, 0))
+crop_frame = ttk.Frame(extract_frame, style="Card.TFrame"); crop_frame.pack(fill=tk.X, pady=(5, 0))
 ttk.Label(crop_frame, text="抽出範囲:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 btn_select_crop = ttk.Button(crop_frame, text="抽出範囲を選択", command=open_crop_selector); btn_select_crop.pack(side=tk.LEFT)
 btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, style="Warning.TButton"); btn_reset_crop.pack(side=tk.LEFT, padx=(5, 0))
 
-# --- 設定保存ボタンの追加 ---
 save_settings_frame = ttk.Frame(extract_frame, style="Card.TFrame")
 save_settings_frame.pack(fill=tk.X, pady=(10, 0))
 btn_save_settings = ttk.Button(save_settings_frame, text="💾 現在の選択項目を保存", command=save_settings)
@@ -727,7 +931,6 @@ status_frame.pack(fill=tk.X, pady=(2, 0))
 status_label = ttk.Label(status_frame, text="ステータス: 待機中", font=("Segoe UI", 10), foreground=MUTED_TEXT, background=BG_COLOR)
 status_label.pack(side=tk.LEFT, padx=5)
 
-# --- 起動時の設定読み込みとUI更新 ---
 load_settings()
 update_ui()
 

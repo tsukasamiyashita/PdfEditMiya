@@ -3,10 +3,11 @@ numpy
 PyPDF2
 pdfplumber
 openpyxl
-pymupdf
+PyMuPDF
 ezdxf
 pytesseract
 Pillow
-google-generativeai>=0.5.2
+google-generativeai>=0.5.4
 python-docx
 xlrd
+customtkinter

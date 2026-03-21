@@ -189,20 +189,25 @@ def extract_gemini_task(files, save_dir, options, ui):
         generation_config = None
 
     api_plan = options.get("api_plan", "free")
+    api_rpm = options.get("api_rpm", 12)
+    MAX_RPM = api_rpm
+    
+    if MAX_RPM <= 0:
+        MAX_RPM = 1
+        
+    MIN_REQUEST_INTERVAL = (60.0 / MAX_RPM) * 1.05 # 確実な間隔を空けるための5%マージン
+
     request_timestamps = []
     last_request_time = [0.0]
     rate_limit_lock = threading.Lock()
     
     if api_plan == "free":
-        MAX_RPM = 13  
-        MIN_REQUEST_INTERVAL = 4.5  
-        max_workers = 1
-        BATCH_SIZE = 5
+        max_workers = 1           # 完全に直列処理として実行
+        BATCH_SIZE = 1            # 1ページずつ確実に処理
     else:
-        MAX_RPM = 1000  
-        MIN_REQUEST_INTERVAL = 0.05  
-        max_workers = 10  
-        BATCH_SIZE = 10   
+        # 課金枠: 指定されたRPMに応じて並列度を調整 (上限10並列)
+        max_workers = min(10, max(1, MAX_RPM // 30))
+        BATCH_SIZE = min(10, max_workers)
 
     def process_api_request_for_page(imgs, page_num):
         max_retries = 8
@@ -225,9 +230,6 @@ def extract_gemini_task(files, save_dir, options, ui):
                     
                     if last_request_time[0] > 0 and elapsed < MIN_REQUEST_INTERVAL:
                         wait_t = MIN_REQUEST_INTERVAL - elapsed
-                        last_request_time[0] = current_time + wait_t
-                    else:
-                        last_request_time[0] = current_time
                         
                     expected_run_time = current_time + wait_t
                     
@@ -238,7 +240,9 @@ def extract_gemini_task(files, save_dir, options, ui):
                         rpm_wait_t = 60.0 - (expected_run_time - request_timestamps[0])
                         if rpm_wait_t > 0:
                             expected_run_time += rpm_wait_t
-                        request_timestamps.append(expected_run_time)
+                            
+                    last_request_time[0] = expected_run_time
+                    request_timestamps.append(expected_run_time)
 
                 total_wait = wait_t + rpm_wait_t
                 if total_wait > 0:
@@ -272,15 +276,15 @@ def extract_gemini_task(files, save_dir, options, ui):
                         m = re.search(r'retry in ([\d\.]+)s', err_str)
                         if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
                         if m:
-                            required_sleep = float(m.group(1))
+                            required_sleep = float(m.group(1)) + 2.0 # 猶予を持たせる
                             last_error = f"API制限(429): Google側の制限で約{int(required_sleep)}秒待機します。"
                         else:
                             if "perday" in err_str.lower():
                                 last_error = f"API制限(1日の上限): {model_name}の1日の無料枠を使い切った可能性があります。"
                                 is_fatal_quota = True
                             else:
-                                last_error = f"API制限(429): {model_name}の利用枠上限に達しました。"
-                                required_sleep = 10.0
+                                last_error = f"API制限(429): {model_name}の利用枠上限に達しました(バースト制限)。"
+                                required_sleep = 15.0 # 短いバーストの場合は長めに待機
                     elif "404" in err_str: 
                         last_error = f"モデル未発見(404): {model_name}が利用できません。"
                     else: 
@@ -725,7 +729,7 @@ def aggregate_gemini_task(files, save_dir, options, ui):
     if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な ({', '.join(['.' + ext for ext in search_exts])}) データが見つかりません。")
 
     api_key = options.get("api_key", "")
-    if not api_key: raise Exception("Gemini APIキーが設定されていません。「データ抽出・変換設定」でAPIキーを入力してください。")
+    if not api_key: raise Exception("Gemini APIキーが設定されていません。「⚙️ 詳細設定」ボタンからAPIキーを入力してください。")
     genai.configure(api_key=api_key)
     models_to_try = options.get("models_to_try", ["gemini-2.5-flash"])
     model_name = models_to_try[0]
@@ -841,13 +845,42 @@ def aggregate_gemini_task(files, save_dir, options, ui):
 
     generation_config = {"response_mime_type": "application/json"}
     
+    max_retries = 5
+    result_text = ""
+    last_error = ""
+    
+    for attempt in range(max_retries):
+        if ui.is_cancelled(): return
+        try:
+            if attempt > 0:
+                ui.set_indeterminate(f"Gemini APIでデータを統合・集約中... (再試行 {attempt}/{max_retries-1})")
+                
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, combined_text], generation_config=generation_config)
+            if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
+            
+            result_text = response.text.strip()
+            break # 成功したのでループを抜ける
+            
+        except Exception as e:
+            err_str = str(e)
+            last_error = err_str
+            if attempt < max_retries - 1 and ("429" in err_str or "Quota" in err_str):
+                # 抽出処理の直後にAPIを叩くためバーストしやすい。引っかかった場合は長めに待機する
+                m = re.search(r'retry in ([\d\.]+)s', err_str)
+                if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
+                wait_sec = float(m.group(1)) + 2.0 if m else 15.0
+                
+                ui.set_indeterminate(f"API制限回避のため約{int(wait_sec)}秒待機中...")
+                wait_step = 0.5
+                while wait_sec > 0:
+                    if ui.is_cancelled(): return
+                    time.sleep(min(wait_step, wait_sec))
+                    wait_sec -= wait_step
+            else:
+                raise Exception(f"Gemini APIによる集約に失敗しました: {last_error}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
+    
     try:
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content([prompt, combined_text], generation_config=generation_config)
-        if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
-        
-        # JSONパースエラーを回避するための保護処理(切断回避のため結合形式で記述)
-        result_text = response.text.strip()
         md_fence = "`" * 3
         if result_text.startswith(md_fence + "json"): result_text = result_text[7:]
         if result_text.startswith(md_fence): result_text = result_text[3:]
@@ -865,7 +898,7 @@ def aggregate_gemini_task(files, save_dir, options, ui):
         final_data = [final_header] + final_rows
         
     except Exception as e:
-        raise Exception(f"Gemini APIによる集約に失敗しました: {e}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
+        raise Exception(f"Gemini APIによる集約結果の解析に失敗しました: {e}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
 
     if ui.is_cancelled(): return
     ui.set_indeterminate("集約データを保存中...")
