@@ -176,7 +176,6 @@ def extract_gemini_task(files, save_dir, options, ui):
               ]
             }
             """
-        generation_config = {"response_mime_type": "application/json"}
     else:
         if crop_regions:
             prompt = """
@@ -186,28 +185,48 @@ def extract_gemini_task(files, save_dir, options, ui):
             """
         else:
             prompt = "この画像に記載されている手書きの文字や文章を可能な限り正確に読み取り、プレーンテキストとして出力してください。また、縦書きの文章は改行を取り除き、横書きに変換して出力してください。"
-        generation_config = None
 
+    # オプションの取得
     api_plan = options.get("api_plan", "free")
     api_rpm = options.get("api_rpm", 12)
-    MAX_RPM = api_rpm
+    temperature = options.get("temperature", 0.0)
+    disable_safety = options.get("disable_safety", True)
+    max_tokens = options.get("max_tokens", 8192)
+    custom_prompt = options.get("custom_prompt", "")
+    threads_setting = options.get("threads", 1 if api_plan == "free" else 5)
     
-    if MAX_RPM <= 0:
-        MAX_RPM = 1
-        
-    MIN_REQUEST_INTERVAL = (60.0 / MAX_RPM) * 1.05 # 確実な間隔を空けるための5%マージン
+    if custom_prompt.strip():
+        prompt += f"\n\n【ユーザーからの追加指示（厳守すること）】\n{custom_prompt.strip()}"
+
+    generation_config_base = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+    }
+    
+    if out_format in ["csv", "xlsx", "json", "md", "docx"]:
+        generation_config = generation_config_base.copy()
+        generation_config["response_mime_type"] = "application/json"
+    else:
+        generation_config = generation_config_base.copy()
+
+    safety_settings = None
+    if disable_safety:
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
+
+    MAX_RPM = api_rpm if api_rpm > 0 else 1
+    MIN_REQUEST_INTERVAL = (60.0 / MAX_RPM) * 1.05
 
     request_timestamps = []
     last_request_time = [0.0]
     rate_limit_lock = threading.Lock()
     
-    if api_plan == "free":
-        max_workers = 1           # 完全に直列処理として実行
-        BATCH_SIZE = 1            # 1ページずつ確実に処理
-    else:
-        # 課金枠: 指定されたRPMに応じて並列度を調整 (上限10並列)
-        max_workers = min(10, max(1, MAX_RPM // 30))
-        BATCH_SIZE = min(10, max_workers)
+    max_workers = threads_setting
+    BATCH_SIZE = threads_setting
 
     def process_api_request_for_page(imgs, page_num):
         max_retries = 8
@@ -261,10 +280,11 @@ def extract_gemini_task(files, save_dir, options, ui):
                 try:
                     model = genai.GenerativeModel(model_name)
                     contents = [prompt] + imgs
+                    
                     if generation_config:
-                        response = model.generate_content(contents, generation_config=generation_config)
+                        response = model.generate_content(contents, generation_config=generation_config, safety_settings=safety_settings)
                     else:
-                        response = model.generate_content(contents)
+                        response = model.generate_content(contents, safety_settings=safety_settings)
                         
                     if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
                     extracted_text = response.text.strip()
@@ -276,7 +296,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                         m = re.search(r'retry in ([\d\.]+)s', err_str)
                         if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
                         if m:
-                            required_sleep = float(m.group(1)) + 2.0 # 猶予を持たせる
+                            required_sleep = float(m.group(1)) + 2.0 
                             last_error = f"API制限(429): Google側の制限で約{int(required_sleep)}秒待機します。"
                         else:
                             if "perday" in err_str.lower():
@@ -284,7 +304,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                                 is_fatal_quota = True
                             else:
                                 last_error = f"API制限(429): {model_name}の利用枠上限に達しました(バースト制限)。"
-                                required_sleep = 15.0 # 短いバーストの場合は長めに待機
+                                required_sleep = 15.0 
                     elif "404" in err_str: 
                         last_error = f"モデル未発見(404): {model_name}が利用できません。"
                     else: 
@@ -843,7 +863,28 @@ def aggregate_gemini_task(files, save_dir, options, ui):
     }
     """
 
-    generation_config = {"response_mime_type": "application/json"}
+    temperature = options.get("temperature", 0.0)
+    disable_safety = options.get("disable_safety", True)
+    max_tokens = options.get("max_tokens", 8192)
+    custom_prompt = options.get("custom_prompt", "")
+    
+    if custom_prompt.strip():
+        prompt += f"\n\n【ユーザーからの追加指示（厳守すること）】\n{custom_prompt.strip()}"
+
+    generation_config = {
+        "temperature": temperature,
+        "max_output_tokens": max_tokens,
+        "response_mime_type": "application/json"
+    }
+
+    safety_settings = None
+    if disable_safety:
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
     
     max_retries = 5
     result_text = ""
@@ -856,7 +897,7 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                 ui.set_indeterminate(f"Gemini APIでデータを統合・集約中... (再試行 {attempt}/{max_retries-1})")
                 
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content([prompt, combined_text], generation_config=generation_config)
+            response = model.generate_content([prompt, combined_text], generation_config=generation_config, safety_settings=safety_settings)
             if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
             
             result_text = response.text.strip()
