@@ -358,16 +358,13 @@ def extract_gemini_task(files, save_dir, options, ui):
                 
                 page_tasks[page_num] = {}
                 for region_idx, crop_img_array in enumerate(cropped_images):
-                    gray = cv2.cvtColor(crop_img_array, cv2.COLOR_RGB2GRAY)
-                    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-                    binary = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 5)
-                    clean_bg = np.where(binary == 255, 255, gray)
-                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                    enhanced = clahe.apply(clean_bg.astype(np.uint8))
-                    blur_for_sharp = cv2.GaussianBlur(enhanced, (0, 0), 2)
-                    sharp = cv2.addWeighted(enhanced, 1.5, blur_for_sharp, -0.5, 0)
-                    img = Image.fromarray(cv2.cvtColor(sharp, cv2.COLOR_GRAY2RGB))
-                    
+                    img = Image.fromarray(crop_img_array)
+                    max_size = 2048
+                    if max(img.width, img.height) > max_size:
+                        ratio = max_size / max(img.width, img.height)
+                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+                        
                     page_tasks[page_num][region_idx] = (img, crop_img_array)
             
             page_results = {}
@@ -397,11 +394,10 @@ def extract_gemini_task(files, save_dir, options, ui):
                         if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                             try:
                                 clean_text = extracted_text.strip()
-                                md_fence = "`" * 3
-                                if clean_text.startswith(md_fence + "json"): clean_text = clean_text[7:]
-                                if clean_text.startswith(md_fence): clean_text = clean_text[3:]
-                                if clean_text.endswith(md_fence): clean_text = clean_text[:-3]
-                                clean_text = clean_text.strip()
+                                # 正規表現でJSON部分のみを抽出
+                                json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+                                if json_match:
+                                    clean_text = json_match.group(0)
                                 
                                 data = json.loads(clean_text)
                                 regions_data = data.get("regions", [])
@@ -440,11 +436,9 @@ def extract_gemini_task(files, save_dir, options, ui):
                         if out_format in ["xlsx", "csv", "json", "md", "docx"]:
                             try:
                                 clean_text = extracted_text.strip()
-                                md_fence = "`" * 3
-                                if clean_text.startswith(md_fence + "json"): clean_text = clean_text[7:]
-                                if clean_text.startswith(md_fence): clean_text = clean_text[3:]
-                                if clean_text.endswith(md_fence): clean_text = clean_text[:-3]
-                                clean_text = clean_text.strip()
+                                json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+                                if json_match:
+                                    clean_text = json_match.group(0)
                                 
                                 data = json.loads(clean_text)
                                 header = data.get("header", [])
@@ -590,7 +584,6 @@ def aggregate_local_task(files, save_dir, options, ui):
         ui.set_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
         
         ext_lower = os.path.splitext(f)[1].lower().strip('.')
-        # アプリで抽出したデータの場合は接尾辞を取り除いてスッキリさせ、一般のファイルならそのままの名前を使う
         fname = os.path.basename(f)
         fname = re.sub(r'(?i)(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + ext_lower + '$', '.pdf', fname)
         
@@ -599,7 +592,6 @@ def aggregate_local_task(files, save_dir, options, ui):
                 wb = openpyxl.load_workbook(f, data_only=True)
                 for sheet in wb.sheetnames:
                     all_rows = list(wb[sheet].iter_rows(values_only=True))
-                    # 一般のExcelファイルに対応するため、最初の有効な行（空でない行）を自動的にヘッダーとして認識する
                     valid_rows = []
                     for r in all_rows:
                         if r and any(c is not None and str(c).strip() != "" for c in r):
@@ -623,7 +615,6 @@ def aggregate_local_task(files, save_dir, options, ui):
                         else: map_to_master(fname, valid_rows[0], [])
             elif ext_lower == "csv":
                 rows = []
-                # 他のシステムで作成された一般的なCSV（Shift_JISなど）にも対応するためのフォールバック処理
                 try:
                     with open(f, "r", encoding="utf-8-sig") as f_in: rows = list(csv.reader(f_in))
                 except UnicodeDecodeError:
@@ -772,9 +763,11 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                 wb = openpyxl.load_workbook(f, data_only=True)
                 for sheet in wb.sheetnames:
                     for r in wb[sheet].iter_rows(values_only=True):
-                        # 空行を無視してデータがある行だけを抽出
+                        # 抽出精度向上のため、完全に空の行をスキップ
                         if r and any(c is not None and str(c).strip() != "" for c in r):
-                            file_data_str += "\t".join([str(c).replace('\n', ' ') if c is not None else "" for c in r]) + "\n"
+                            # None値を空文字に変換
+                            cleaned_row = [str(c).replace('\n', ' ').strip() if c is not None else "" for c in r]
+                            file_data_str += "\t".join(cleaned_row) + "\n"
                 wb.close()
             elif ext_lower == "xls":
                 if xlrd is None: raise Exception("xlsファイルの読み込みには 'xlrd' が必要です。")
@@ -784,7 +777,8 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                     for r_idx in range(sheet.nrows):
                         r = sheet.row_values(r_idx)
                         if r and any(c is not None and str(c).strip() != "" for c in r):
-                            file_data_str += "\t".join([str(c).replace('\n', ' ') if c is not None else "" for c in r]) + "\n"
+                            cleaned_row = [str(c).replace('\n', ' ').strip() if c is not None else "" for c in r]
+                            file_data_str += "\t".join(cleaned_row) + "\n"
             elif ext_lower == "csv":
                 rows = []
                 try:
@@ -795,8 +789,9 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                     except Exception:
                         with open(f, "r", encoding="utf-8", errors="ignore") as f_in: rows = list(csv.reader(f_in))
                 for r in rows:
-                    if any(c.strip() != "" for c in r):
-                        file_data_str += "\t".join([c.replace('\n', ' ') for c in r]) + "\n"
+                    if r and any(c.strip() != "" for c in r):
+                        cleaned_row = [c.replace('\n', ' ').strip() for c in r]
+                        file_data_str += "\t".join(cleaned_row) + "\n"
             elif search_ext == "json":
                 with open(f, "r", encoding="utf-8") as f_in:
                     try:
@@ -804,8 +799,8 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                         rows = data.get("rows", []) if isinstance(data, dict) else data
                         if rows and isinstance(rows, list):
                             for r in rows:
-                                if isinstance(r, list): file_data_str += "\t".join([str(c).replace('\n', ' ') for c in r]) + "\n"
-                                else: file_data_str += str(r).replace('\n', ' ') + "\n"
+                                if isinstance(r, list): file_data_str += "\t".join([str(c).replace('\n', ' ').strip() if c is not None else "" for c in r]) + "\n"
+                                else: file_data_str += str(r).replace('\n', ' ').strip() + "\n"
                     except: pass
             elif search_ext == "md":
                 with open(f, "r", encoding="utf-8") as f_in:
@@ -820,7 +815,7 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                     doc_in = Document(f)
                     for table in doc_in.tables:
                         for row in table.rows:
-                            file_data_str += "\t".join([cell.text.replace('\n', ' ') for cell in row.cells]) + "\n"
+                            file_data_str += "\t".join([cell.text.replace('\n', ' ').strip() for cell in row.cells]) + "\n"
             elif search_ext == "txt":
                 text_content = ""
                 try:
@@ -847,13 +842,14 @@ def aggregate_gemini_task(files, save_dir, options, ui):
 
     prompt = """
     あなたは優秀なデータアナリストです。
-    提供された複数のファイルの表データを解析し、意味的に同じ列を自動的に統合して、1つのマスターデータ（JSON形式）を作成してください。
+    提供された複数のファイルの表データ（タブ区切りテキスト形式）を解析し、意味的に同じ列を自動的に統合して、1つのマスターデータを作成してください。
 
     【ルール - 絶対厳守】
-    1. 各行の最初の列には必ず「元ファイル名」という列を設け、そのデータがどのファイルから来たかを明記してください。
+    1. 各行の最初の列には必ず「元ファイル名」という列名（header）とそのファイル名を明記してください。
     2. 列名が異なっていても（例:「氏名」と「名前」、「単価」と「金額」など）、文脈から同じ意味の列と判断できる場合は同じ列に結合してください。
-    3. JSONデータ以外は絶対に出力しないでください（マークダウンの ```json なども不要です）。
-    4. 以下の形式に厳密に従ってください。
+    3. 解析対象にデータが存在しない列については空文字 `""` を入れてください。
+    4. 出力は純粋なJSONデータのみとしてください。解説や挨拶は不要です。
+    5. 以下の形式に厳密に従ってください。
     {
       "header": ["元ファイル名", "統合列名1", "統合列名2", ...],
       "rows": [
@@ -901,13 +897,12 @@ def aggregate_gemini_task(files, save_dir, options, ui):
             if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
             
             result_text = response.text.strip()
-            break # 成功したのでループを抜ける
+            break 
             
         except Exception as e:
             err_str = str(e)
             last_error = err_str
             if attempt < max_retries - 1 and ("429" in err_str or "Quota" in err_str):
-                # 抽出処理の直後にAPIを叩くためバーストしやすい。引っかかった場合は長めに待機する
                 m = re.search(r'retry in ([\d\.]+)s', err_str)
                 if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
                 wait_sec = float(m.group(1)) + 2.0 if m else 15.0
@@ -922,24 +917,22 @@ def aggregate_gemini_task(files, save_dir, options, ui):
                 raise Exception(f"Gemini APIによる集約に失敗しました: {last_error}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
     
     try:
-        md_fence = "`" * 3
-        if result_text.startswith(md_fence + "json"): result_text = result_text[7:]
-        if result_text.startswith(md_fence): result_text = result_text[3:]
-        if result_text.endswith(md_fence): result_text = result_text[:-3]
-        result_text = result_text.strip()
+        # JSON部分のみを抽出する正規表現（より堅牢に）
+        json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+        if json_match:
+            result_text = json_match.group(0)
         
         data = json.loads(result_text)
-        
         final_header = data.get("header", [])
         final_rows = data.get("rows", [])
         
         if not final_header or not final_rows:
-            raise Exception("AIからの応答が不正な形式でした。")
+            raise Exception("AIからの応答が不正な形式（空のヘッダーまたはデータ）でした。")
             
         final_data = [final_header] + final_rows
         
     except Exception as e:
-        raise Exception(f"Gemini APIによる集約結果の解析に失敗しました: {e}\nデータ量が多すぎるか、形式エラーです。ローカル集約を使用してください。")
+        raise Exception(f"Gemini APIによる集約結果の解析に失敗しました: {e}\nデータ量が多すぎる可能性があります。ローカル集約を使用してください。")
 
     if ui.is_cancelled(): return
     ui.set_indeterminate("集約データを保存中...")
