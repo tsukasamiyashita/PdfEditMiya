@@ -10,9 +10,9 @@ from pdf_engine import (
     convert_to_image_jpg, convert_to_image_png, convert_to_dxf,
     convert_to_image_tiff, convert_to_image_bmp, convert_to_svg
 )
-from ai_engine import (
-    extract_tesseract_task, extract_gemini_task, aggregate_local_task, aggregate_gemini_task
-)
+from ocr_engine import extract_tesseract_task
+from gemini_engine import extract_gemini_task
+from aggregate_engine import aggregate_local_task
 
 # ==============================
 # プログレス関連のローカル状態
@@ -154,10 +154,13 @@ def run_task(func, task_name):
         
     except Exception as e:
         print(f"Error: {e}"); close_processing()
-        def _err_status():
-            show_message(f"❌ エラーが発生しました\n{str(e)[:40]}...", ERROR)
+        err_msg = str(e)
+        def _err_status(msg=err_msg):
+            # 親ウィンドウをメインフレーム(state.root)に固定し、クラッシュを防止
+            messagebox.showerror("実行エラー", f"{task_name} 中にエラーが発生しました。\n\n詳細:\n{msg}", parent=state.root)
             if state.status_label: state.status_label.config(text=f"ステータス: {task_name} でエラーが発生しました", foreground=ERROR)
-        state.root.after(0, _err_status)
+        # Toplevelが完全に破棄されるのを待ってからエラーダイアログを表示する (100ms遅延)
+        state.root.after(100, _err_status)
 
 def safe_run(func, task_name="処理"):
     files = state.selected_files if state.current_mode == "file" else ([os.path.join(state.selected_folder, f) for f in os.listdir(state.selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))] if state.selected_folder else [])

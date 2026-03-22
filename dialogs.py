@@ -98,13 +98,21 @@ def open_api_settings_dialog():
     dialog.title("⚙️ AI詳細設定 (Gemini API)")
     
     screen_h = state.root.winfo_screenheight()
+    screen_w = state.root.winfo_screenwidth()
+    
+    dialog_w = min(1050, screen_w - 40)
     dialog_h = min(780, screen_h - 80) 
-    dialog.geometry(f"1050x{dialog_h}") 
+    dialog.geometry(f"{dialog_w}x{dialog_h}") 
     dialog.configure(bg=BG_COLOR)
     dialog.grab_set()
     
-    x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - 525
-    y = max(10, state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (dialog_h // 2))
+    # 座標がマイナスになり左側へはみ出ないように補正を追加
+    raw_x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - (dialog_w // 2)
+    raw_y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (dialog_h // 2)
+    
+    x = max(10, min(raw_x, screen_w - dialog_w - 10))
+    y = max(10, min(raw_y, screen_h - dialog_h - 40))
+    
     dialog.geometry(f"+{x}+{y}")
 
     fav_lists = []
@@ -127,7 +135,7 @@ def open_api_settings_dialog():
     }
 
     def apply_and_close():
-        # 【修正】メイン画面のプランインジケーター表示を更新
+        # プランインジケーター表示を更新
         if state.plan_indicator:
             plan = state.api_plan_var.get()
             if plan == "free":
@@ -185,11 +193,66 @@ def open_api_settings_dialog():
 
     dialog.protocol("WM_DELETE_WINDOW", cancel_and_close)
 
-    lbl_title = ttk.Label(dialog, text="Gemini API 詳細設定", font=("Segoe UI", 16, "bold"), background=BG_COLOR, foreground=PRIMARY)
+    # ==============================
+    # ダイアログ全体のレイアウト構築（スクロール対応）
+    # ==============================
+
+    # 下部固定のボタンエリア
+    btn_action_frame = ttk.Frame(dialog, style="Main.TFrame")
+    btn_action_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 15))
+    
+    btn_cancel = ttk.Button(btn_action_frame, text="キャンセル", command=cancel_and_close, width=15)
+    btn_cancel.pack(side=tk.LEFT, padx=10)
+    
+    btn_apply = ttk.Button(btn_action_frame, text="設定を適用して閉じる", command=apply_and_close, style="Primary.TButton", width=25)
+    btn_apply.pack(side=tk.LEFT, padx=10)
+
+    # 上部のスクロール可能エリア
+    container = ttk.Frame(dialog, style="Main.TFrame")
+    container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    
+    canvas = tk.Canvas(container, bg=BG_COLOR, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    scrollable_frame = ttk.Frame(canvas, style="Main.TFrame")
+
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    
+    def _on_canvas_configure(event):
+        canvas.itemconfig(canvas_window, width=event.width)
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    def _on_mousewheel(event):
+        if not dialog.winfo_exists(): return
+        widget = dialog.winfo_containing(event.x_root, event.y_root)
+        if widget:
+            current = widget
+            while current:
+                if isinstance(current, tk.Canvas):
+                    try: 
+                        current.yview_scroll(int(-1*(event.delta/120)), "units")
+                    except: pass
+                    return
+                current = current.master
+
+    dialog.bind("<MouseWheel>", _on_mousewheel)
+
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    # ==============================
+    # コンテンツの配置（親を scrollable_frame に設定）
+    # ==============================
+
+    lbl_title = ttk.Label(scrollable_frame, text="Gemini API 詳細設定", font=("Segoe UI", 16, "bold"), background=BG_COLOR, foreground=PRIMARY)
     lbl_title.pack(pady=(10, 5))
 
     # --- 実行プランの選択 ---
-    plan_frame = ttk.LabelFrame(dialog, text=" 実行プランの選択 ", style="Card.TLabelframe", padding=8)
+    plan_frame = ttk.LabelFrame(scrollable_frame, text=" 実行プランの選択 ", style="Card.TLabelframe", padding=8)
     plan_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
     
     plan_inner = ttk.Frame(plan_frame, style="Card.TFrame")
@@ -202,7 +265,7 @@ def open_api_settings_dialog():
     rb_paid.pack(side=tk.LEFT)
 
     # --- 個別設定タブの構築 ---
-    notebook = ttk.Notebook(dialog)
+    notebook = ttk.Notebook(scrollable_frame)
     notebook.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
     
     tab_free = ttk.Frame(notebook, style="Main.TFrame")
@@ -330,13 +393,19 @@ def open_api_settings_dialog():
         def show_limit_info(m_var=model_var, is_f=is_free):
             info_win = tk.Toplevel(dialog)
             info_win.title("Gemini API 制限と仕様一覧")
-            info_win.geometry("950x700") 
+            
+            info_w = min(950, screen_w - 40)
+            info_h = min(700, screen_h - 80)
+            info_win.geometry(f"{info_w}x{info_h}") 
             info_win.configure(bg=BG_COLOR)
             info_win.grab_set()
             
-            x = dialog.winfo_x() + 30
-            y = dialog.winfo_y() + 30
-            info_win.geometry(f"+{x}+{y}")
+            # ポップアップウィンドウも画面外にはみ出ないように補正
+            raw_x = dialog.winfo_x() + 30
+            raw_y = dialog.winfo_y() + 30
+            win_x = max(10, min(raw_x, screen_w - info_w - 10))
+            win_y = max(10, min(raw_y, screen_h - info_h - 40))
+            info_win.geometry(f"+{win_x}+{win_y}")
             
             canvas = tk.Canvas(info_win, bg=BG_COLOR, highlightthickness=0)
             scrollbar = ttk.Scrollbar(info_win, orient="vertical", command=canvas.yview)
@@ -566,15 +635,6 @@ def open_api_settings_dialog():
         notebook.select(tab_free)
     else:
         notebook.select(tab_paid)
-
-    btn_action_frame = ttk.Frame(dialog, style="Main.TFrame")
-    btn_action_frame.pack(pady=(10, 15))
-    
-    btn_cancel = ttk.Button(btn_action_frame, text="キャンセル", command=cancel_and_close, width=15)
-    btn_cancel.pack(side=tk.LEFT, padx=10)
-    
-    btn_apply = ttk.Button(btn_action_frame, text="設定を適用して閉じる", command=apply_and_close, style="Primary.TButton", width=25)
-    btn_apply.pack(side=tk.LEFT, padx=10)
 
 # ==============================
 # クロップ(範囲指定)関連

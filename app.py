@@ -8,7 +8,7 @@ from config import *
 from dialogs import open_api_settings_dialog, open_crop_selector, reset_crop_regions
 from task_runner import safe_run, run_selected_extraction
 from pdf_engine import merge_pdfs, split_pdfs, rotate_pdfs
-from ai_engine import aggregate_local_task, aggregate_gemini_task
+from aggregate_engine import aggregate_local_task
 
 # ==============================
 # 設定の保存・読み込み機能
@@ -155,7 +155,7 @@ def update_ui():
     is_active = state.current_mode is not None
     state_val = tk.NORMAL if is_active else tk.DISABLED
     btn_split.config(state=state_val); btn_rotate.config(state=state_val); btn_extract.config(state=state_val)
-    btn_aggregate_local.config(state=state_val); btn_aggregate_gemini.config(state=state_val)
+    btn_aggregate_local.config(state=state_val)
     btn_merge.config(state=tk.NORMAL if state.current_mode=="folder" else tk.DISABLED)
     if not is_active: reset_crop_regions()
     toggle_extraction_settings()
@@ -353,16 +353,9 @@ btn_rotate = ttk.Button(pdf_action_frame, text="回転", command=lambda: safe_ru
 data_action_frame = ttk.LabelFrame(action_container, text=" 📊 データ操作 ", style="Card.TLabelframe", padding=5); data_action_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 btn_extract = ttk.Button(data_action_frame, text="🚀 選択した抽出・変換を実行", command=run_selected_extraction, style="Danger.TButton"); btn_extract.pack(fill=tk.X, pady=(2, 6), ipady=6) 
 
-aggregate_btn_frame = ttk.Frame(data_action_frame, style="Card.TFrame")
-aggregate_btn_frame.pack(fill=tk.X, pady=2)
-aggregate_btn_frame.columnconfigure(0, weight=1)
-aggregate_btn_frame.columnconfigure(1, weight=1)
-
-btn_aggregate_local = ttk.Button(aggregate_btn_frame, text="🧩 ローカルで集約", command=lambda: safe_run(aggregate_local_task, "ローカルデータ集約"), style="Purple.TButton")
-btn_aggregate_local.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
-
-btn_aggregate_gemini = ttk.Button(aggregate_btn_frame, text="✨ Geminiで集約", command=lambda: safe_run(aggregate_gemini_task, "Geminiデータ集約"), style="Purple.TButton")
-btn_aggregate_gemini.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
+# ここで Gemini 集約ボタンを削除し、ローカル集約のみのボタンに変更
+btn_aggregate_local = ttk.Button(data_action_frame, text="🧩 データ集約", command=lambda: safe_run(aggregate_local_task, "データ集約"), style="Purple.TButton")
+btn_aggregate_local.pack(fill=tk.X, pady=2)
 
 status_frame = ttk.Frame(main_container, style="Main.TFrame")
 status_frame.pack(fill=tk.X, pady=(2, 0))
