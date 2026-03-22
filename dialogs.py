@@ -643,6 +643,8 @@ class CropSelector:
         btn_frame.pack(fill=tk.X)
         
         ttk.Button(btn_frame, text="クリア", command=self.clear_rects, style="Warning.TButton").pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="戻る", command=self.undo).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="進む", command=self.redo).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="設定して閉じる", command=self.save_and_close, style="Primary.TButton").pack(side=tk.RIGHT, padx=5)
         
         zoom_frame = ttk.Frame(btn_frame)
@@ -651,7 +653,7 @@ class CropSelector:
         ttk.Button(zoom_frame, text="縮小 (-)", command=self.zoom_out, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(zoom_frame, text="フィット", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(btn_frame, text="【使い方】ドラッグで範囲を選択。Ctrl+ホイール: 拡縮 / Shift+ホイール: 横スクロール", foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
+        ttk.Label(btn_frame, text="【使い方】ドラッグで範囲選択。Ctrl+Z: 戻る / Ctrl+ホイール: 拡縮 / Shift+ホイール: 横スクロール", foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
 
         canvas_frame = ttk.Frame(self.top)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -669,7 +671,7 @@ class CropSelector:
         self.vbar.config(command=self.canvas.yview)
         self.hbar.config(command=self.canvas.xview)
 
-        self.start_x, self.start_y, self.current_rect, self.rectangles = None, None, None, []
+        self.start_x, self.start_y, self.current_rect, self.rectangles, self.redo_stack = None, None, None, [], []
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -678,6 +680,8 @@ class CropSelector:
             self.canvas.bind("<MouseWheel>", self.on_mousewheel_y)
             self.canvas.bind("<Shift-MouseWheel>", self.on_mousewheel_x)
             self.canvas.bind("<Control-MouseWheel>", self.on_mousewheel_zoom)
+        self.top.bind("<Control-z>", lambda e: self.undo())
+        self.top.bind("<Control-y>", lambda e: self.redo())
 
         try:
             self.doc = fitz.open(pdf_path)
@@ -704,11 +708,16 @@ class CropSelector:
     def zoom_out(self): self.zoom = max(0.2, self.zoom / 1.2); self.draw_image()
     def zoom_fit(self): self.zoom = min(2.0, (self.top.winfo_screenheight() * 0.7) / self.page.rect.height); self.draw_image()
     
-    def on_mousewheel_y(self, event): self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-    def on_mousewheel_x(self, event): self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+    def on_mousewheel_y(self, event): 
+        if event.state & 0x0001: return # Shiftキー押下時は縦スクロールをキャンセル
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    def on_mousewheel_x(self, event): 
+        self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+        return "break"
     def on_mousewheel_zoom(self, event):
         if event.delta > 0: self.zoom_in()
         else: self.zoom_out()
+        return "break"
         
     def on_press(self, event):
         self.start_x, self.start_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
@@ -719,10 +728,25 @@ class CropSelector:
         if abs(end_x - self.start_x) > 10 and abs(end_y - self.start_y) > 10:
             self.canvas.itemconfig(self.current_rect, dash=())
             self.rectangles.append({'id': self.current_rect, 'rx1': min(self.start_x, end_x)/self.img_w, 'ry1': min(self.start_y, end_y)/self.img_h, 'rx2': max(self.start_x, end_x)/self.img_w, 'ry2': max(self.start_y, end_y)/self.img_h})
+            self.redo_stack.clear()
         else: self.canvas.delete(self.current_rect)
+
+    def undo(self):
+        if self.rectangles:
+            rect = self.rectangles.pop()
+            self.canvas.delete(rect['id'])
+            self.redo_stack.append(rect)
+
+    def redo(self):
+        if self.redo_stack:
+            rect = self.redo_stack.pop()
+            rect['id'] = self.canvas.create_rectangle(rect['rx1']*self.img_w, rect['ry1']*self.img_h, rect['rx2']*self.img_w, rect['ry2']*self.img_h, outline="red", width=2)
+            self.rectangles.append(rect)
+
     def clear_rects(self):
         for r in self.rectangles: self.canvas.delete(r['id'])
         self.rectangles.clear()
+        self.redo_stack.clear()
     def save_and_close(self):
         state.selected_crop_regions = [(r['rx1'], r['ry1'], r['rx2'], r['ry2']) for r in self.rectangles]
         if state.btn_select_crop:

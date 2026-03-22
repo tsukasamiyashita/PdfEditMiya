@@ -127,9 +127,6 @@ def extract_gemini_task(files, save_dir, options, ui):
     MAX_RPM = api_rpm if api_rpm > 0 else 1
     max_workers = max(1, threads_setting)
 
-    # 実行時のタイムスタンプを取得
-    run_timestamp = time.strftime("%Y%m%d_%H%M%S")
-
     # グローバルな状態管理
     request_timestamps = []
     rate_limit_lock = threading.Lock()
@@ -460,8 +457,8 @@ def extract_gemini_task(files, save_dir, options, ui):
                 else:
                     for row in merged_data: final_data.append([page_info_str] + row)
             
-            # タイムスタンプをファイル名に含める
-            save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出_{run_timestamp}")
+            # 元のファイル名（_Page_XX_AI抽出）のみを使用する（タイムスタンプは付与しない）
+            save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出")
             if out_format == "xlsx":
                 wb = Workbook(); ws = wb.active; ws.title = f"Page_{str(page_num+1).zfill(digits)}"
                 for r_idx, row_data in enumerate(final_data, 1):
