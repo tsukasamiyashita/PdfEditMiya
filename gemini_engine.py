@@ -13,7 +13,7 @@ try:
 except ImportError:
     Document = None
 
-from utils import (
+from common import (
     auto_adjust_excel_column_width,
     parse_row_data,
     merge_2d_arrays_horizontally,
@@ -125,11 +125,15 @@ def extract_gemini_task(files, save_dir, options, ui):
     MAX_RPM = api_rpm if api_rpm > 0 else 1
     max_workers = max(1, threads_setting)
 
+    # 実行時のタイムスタンプを取得
+    run_timestamp = time.strftime("%Y%m%d_%H%M%S")
+
     # グローバルな状態管理
     request_timestamps = []
     rate_limit_lock = threading.Lock()
     progress_lock = threading.Lock()
     completed_pages = 0
+    shared_context = {"fatal_error": None}
 
     # 全ファイル・全ページのタスクリストを事前に作成
     page_tasks = []
@@ -158,7 +162,9 @@ def extract_gemini_task(files, save_dir, options, ui):
 
     def process_single_page_task(task_info):
         """1ページ分の全領域を1回のAPIリクエストで処理するタスク"""
+        if shared_context["fatal_error"]: return
         if ui.is_cancelled(): return
+        
         f_path = task_info["file_path"]
         page_num = task_info["page_num"]
         total_p = task_info["total_pages"]
@@ -217,11 +223,13 @@ def extract_gemini_task(files, save_dir, options, ui):
             extracted_text, success, last_error = "", False, ""
             
             for attempt in range(max_retries):
+                if shared_context["fatal_error"]: raise Exception(shared_context["fatal_error"])
                 if ui.is_cancelled(): return
                 required_sleep = 0.0
                 is_fatal_quota = False
                 
                 for model_name in models_to_try:
+                    if shared_context["fatal_error"]: raise Exception(shared_context["fatal_error"])
                     if ui.is_cancelled(): return
                     total_wait = 0.0
                     
@@ -253,6 +261,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                             ui.set_indeterminate(f"通信間隔調整中... (約 {int(total_wait)}秒待機)")
                         wait_step = 0.5
                         while total_wait > 0:
+                            if shared_context["fatal_error"]: raise Exception(shared_context["fatal_error"])
                             if ui.is_cancelled(): return
                             time.sleep(min(wait_step, total_wait))
                             total_wait -= wait_step
@@ -273,20 +282,36 @@ def extract_gemini_task(files, save_dir, options, ui):
                         break
                     except Exception as api_err: 
                         err_str = str(api_err)
+                        last_error = err_str
                         if "429" in err_str or "Quota" in err_str:
-                            m = re.search(r'retry in ([\d\.]+)s', err_str)
-                            if not m: m = re.search(r'seconds:\s*(\d+)', err_str)
+                            m = re.search(r'retry in ([\d\.]+)s', err_str, re.IGNORECASE | re.DOTALL)
+                            if not m: m = re.search(r'seconds:\s*(\d+)', err_str, re.IGNORECASE | re.DOTALL)
                             if m:
-                                required_sleep = float(m.group(1)) + 2.0 
+                                wait_sec = float(m.group(1))
+                                if wait_sec > 15.0:  # 長い待機時間を要求された場合は即座に打ち切る
+                                    msg = f"APIの利用枠（バースト制限）を超過しました（約{int(wait_sec)}秒の待機を要求されました）。\n処理全体を即時中断します。しばらく時間をおいてから再試行してください。"
+                                    shared_context["fatal_error"] = msg
+                                    raise Exception(msg)
+                                required_sleep = wait_sec + 2.0 
                             else:
-                                if "perday" in err_str.lower() or "per day" in err_str.lower():
-                                    is_fatal_quota = True
+                                if "per day" in err_str.lower() or "perday" in err_str.lower():
+                                    msg = "1日のAPI利用上限に到達しました。\n無料枠の場合は明日以降に再度お試しください。"
+                                    shared_context["fatal_error"] = msg
+                                    raise Exception(msg)
                                 else:
+                                    if attempt >= 2:
+                                        msg = "APIの利用枠（クォータ）を超過している可能性が高いです。\n回復しないため処理全体を即時中断します。プランや利用状況を確認してください。"
+                                        shared_context["fatal_error"] = msg
+                                        raise Exception(msg)
                                     required_sleep = 4.0 + random.uniform(1.0, 3.0) 
-                        elif "404" in err_str: pass
+                        elif "404" in err_str: 
+                            msg = f"モデルが存在しないか、利用する権限がありません。\n詳細: {err_str}"
+                            shared_context["fatal_error"] = msg
+                            raise Exception(msg)
                         continue
                 
                 if success or is_fatal_quota: break
+                if shared_context["fatal_error"]: raise Exception(shared_context["fatal_error"])
                 if ui.is_cancelled(): return
                 
                 if required_sleep > 0: sleep_time = required_sleep
@@ -294,6 +319,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                     
                 wait_step = 0.5
                 while sleep_time > 0:
+                    if shared_context["fatal_error"]: raise Exception(shared_context["fatal_error"])
                     if ui.is_cancelled(): return
                     time.sleep(min(wait_step, sleep_time))
                     sleep_time -= wait_step
@@ -432,7 +458,8 @@ def extract_gemini_task(files, save_dir, options, ui):
                 else:
                     for row in merged_data: final_data.append([page_info_str] + row)
             
-            save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出")
+            # タイムスタンプをファイル名に含める
+            save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出_{run_timestamp}")
             if out_format == "xlsx":
                 wb = Workbook(); ws = wb.active; ws.title = f"Page_{str(page_num+1).zfill(digits)}"
                 for r_idx, row_data in enumerate(final_data, 1):
@@ -468,16 +495,28 @@ def extract_gemini_task(files, save_dir, options, ui):
             gc.collect()
 
         except Exception as e:
-            print(f"Error processing page {page_num} of {f_path}: {e}")
+            if shared_context["fatal_error"]:
+                raise Exception(shared_context["fatal_error"])
+            raise Exception(f"ページ {page_num+1} の処理中にエラーが発生しました: {e}")
 
     # 完全にフラット化されたタスクリストをスレッドプールで一気に並列処理
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_single_page_task, task) for task in page_tasks]
         
         for future in concurrent.futures.as_completed(futures):
-            if ui.is_cancelled():
+            # 共有エラーフラグが立っている、またはキャンセルされた場合は全体をシャットダウン
+            if ui.is_cancelled() or shared_context["fatal_error"]:
                 executor.shutdown(wait=False, cancel_futures=True)
+                if shared_context["fatal_error"]:
+                    raise Exception(shared_context["fatal_error"])
                 return
+            
+            # タスク内で発生した例外（バースト制限など）をここでキャッチしてメインスレッドに投げる
+            try:
+                future.result()
+            except Exception as e:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise e
             
             with progress_lock:
                 completed_pages += 1

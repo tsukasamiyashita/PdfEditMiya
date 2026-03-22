@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 warnings.filterwarnings("ignore", category=FutureWarning)
 import google.generativeai as genai
 
-from config import *
+from common import *
 
 # ==============================
 # UI共通コンポーネント
@@ -106,7 +106,6 @@ def open_api_settings_dialog():
     dialog.configure(bg=BG_COLOR)
     dialog.grab_set()
     
-    # 座標がマイナスになり左側へはみ出ないように補正を追加
     raw_x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - (dialog_w // 2)
     raw_y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (dialog_h // 2)
     
@@ -135,7 +134,6 @@ def open_api_settings_dialog():
     }
 
     def apply_and_close():
-        # プランインジケーター表示を更新
         if state.plan_indicator:
             plan = state.api_plan_var.get()
             if plan == "free":
@@ -194,10 +192,8 @@ def open_api_settings_dialog():
     dialog.protocol("WM_DELETE_WINDOW", cancel_and_close)
 
     # ==============================
-    # ダイアログ全体のレイアウト構築（スクロール対応）
+    # ダイアログ全体のレイアウト構築
     # ==============================
-
-    # 下部固定のボタンエリア
     btn_action_frame = ttk.Frame(dialog, style="Main.TFrame")
     btn_action_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 15))
     
@@ -207,7 +203,6 @@ def open_api_settings_dialog():
     btn_apply = ttk.Button(btn_action_frame, text="設定を適用して閉じる", command=apply_and_close, style="Primary.TButton", width=25)
     btn_apply.pack(side=tk.LEFT, padx=10)
 
-    # 上部のスクロール可能エリア
     container = ttk.Frame(dialog, style="Main.TFrame")
     container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
     
@@ -245,13 +240,11 @@ def open_api_settings_dialog():
     scrollbar.pack(side="right", fill="y")
 
     # ==============================
-    # コンテンツの配置（親を scrollable_frame に設定）
+    # コンテンツの配置
     # ==============================
-
     lbl_title = ttk.Label(scrollable_frame, text="Gemini API 詳細設定", font=("Segoe UI", 16, "bold"), background=BG_COLOR, foreground=PRIMARY)
     lbl_title.pack(pady=(10, 5))
 
-    # --- 実行プランの選択 ---
     plan_frame = ttk.LabelFrame(scrollable_frame, text=" 実行プランの選択 ", style="Card.TLabelframe", padding=8)
     plan_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
     
@@ -264,7 +257,6 @@ def open_api_settings_dialog():
     rb_paid = ttk.Radiobutton(plan_inner, text="課金枠 (Paid Tier)", variable=state.api_plan_var, value="paid")
     rb_paid.pack(side=tk.LEFT)
 
-    # --- 個別設定タブの構築 ---
     notebook = ttk.Notebook(scrollable_frame)
     notebook.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
     
@@ -292,7 +284,6 @@ def open_api_settings_dialog():
         prompt_var = state.custom_prompt_free_var if is_free else state.custom_prompt_paid_var
         threads_var = state.threads_free_var if is_free else state.threads_paid_var
         
-        # ① APIキー
         key_frame = ttk.LabelFrame(parent_tab, text=" ① APIキー ", style="Card.TLabelframe", padding=8)
         key_frame.pack(fill=tk.X, padx=10, pady=5)
         
@@ -318,13 +309,15 @@ def open_api_settings_dialog():
         btn_toggle.config(command=toggle_key)
 
         def test_key(k_var=key_var, m_var=model_var):
+            import time
             key = k_var.get().strip()
             if not key: return messagebox.showwarning("警告", "APIキーが入力されていません。", parent=dialog)
             genai.configure(api_key=key)
             model_name = m_var.get()
             try:
                 model = genai.GenerativeModel(model_name)
-                model.generate_content("Test")
+                # キャッシュ回避のため毎回異なる文字列（タイムスタンプ付き）を送信
+                model.generate_content(f"Connection Test: {time.time()}")
                 messagebox.showinfo("テスト成功", f"APIキーは正しく認識されました。\nAIモデル「{model_name}」による通信は正常です！", parent=dialog)
             except Exception as e:
                 err_str = str(e).lower()
@@ -336,10 +329,12 @@ def open_api_settings_dialog():
                     if not m: m = re.search(r'seconds:\s*(\d+)', err_str, re.IGNORECASE | re.DOTALL)
                     if m:
                         wait_sec = int(float(m.group(1)))
-                        msg += f"⚠️ Googleのバースト制限です。約 {wait_sec} 秒後に利用枠が回復します。\n"
+                        msg += f"⚠️ Googleの制限により、約 {wait_sec} 秒後に利用枠が回復すると報告されています。\n"
+                        msg += "（※数分待っても回復しない場合は、1日あたりの利用上限に到達している可能性が高いです）\n"
                     else:
-                        if "perday" in err_str.lower() or "limit: 20" in err_str.lower(): msg += "⚠️ 【1日の利用上限】に達した可能性があります。\n"
+                        if "per day" in err_str or "perday" in err_str: msg += "⚠️ 【1日の利用上限】に達しました。明日以降に再度お試しください。\n"
                         else: msg += "⚠️ APIの制限に達しました。\n"
+                    msg += f"\n詳細（生のエラー）:\n{e}"
                     messagebox.showerror("利用枠超過", msg, parent=dialog)
                 else:
                     messagebox.showerror("通信エラー", f"APIキーまたは通信に問題が発生しました。\n詳細:\n{e}", parent=dialog)
@@ -347,13 +342,11 @@ def open_api_settings_dialog():
         btn_test = ttk.Button(key_inner, text="テスト", command=test_key, width=6)
         btn_test.pack(side=tk.LEFT)
 
-        # 縦幅圧縮のため、②と③を横並びにするレイアウト枠
         middle_frame = ttk.Frame(parent_tab, style="Main.TFrame")
         middle_frame.pack(fill=tk.X, padx=10, pady=5)
         middle_frame.columnconfigure(0, weight=1)
         middle_frame.columnconfigure(1, weight=1)
 
-        # ② モデル・パフォーマンス設定 (左側)
         perf_frame = ttk.LabelFrame(middle_frame, text=" ② モデル・パフォーマンス設定 ", style="Card.TLabelframe", padding=8)
         perf_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
@@ -400,7 +393,6 @@ def open_api_settings_dialog():
             info_win.configure(bg=BG_COLOR)
             info_win.grab_set()
             
-            # ポップアップウィンドウも画面外にはみ出ないように補正
             raw_x = dialog.winfo_x() + 30
             raw_y = dialog.winfo_y() + 30
             win_x = max(10, min(raw_x, screen_w - info_w - 10))
@@ -502,7 +494,6 @@ def open_api_settings_dialog():
         btn_reset_perf = ttk.Button(perf_action_inner, text="🔄 推奨値", command=lambda m=model_var, r=rpm_var, t=threads_var, f=is_free: reset_perf(m, r, t, f))
         btn_reset_perf.pack(side=tk.RIGHT)
 
-        # ③ 抽出パラメータ設定 (右側)
         param_frame = ttk.LabelFrame(middle_frame, text=" ③ AI抽出パラメータ設定 ", style="Card.TLabelframe", padding=8)
         param_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         
@@ -530,7 +521,6 @@ def open_api_settings_dialog():
         btn_reset_param = ttk.Button(param_row2, text="🔄 推奨値", command=lambda t=temp_var, tok=tokens_var, s=safety_var, f=is_free: reset_param(t, tok, s, f))
         btn_reset_param.pack(side=tk.RIGHT, pady=(10, 0))
 
-        # ④ 独自の追加指示 (カスタムプロンプト) - 左右分割リスト型UI
         prompt_frame = ttk.LabelFrame(parent_tab, text=" ④ 独自の追加指示 (カスタムプロンプト) - 任意 ", style="Card.TLabelframe", padding=8)
         prompt_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
@@ -746,7 +736,6 @@ def open_crop_selector():
     try: CropSelector(state.root, pdf_files[0])
     except Exception as e: messagebox.showerror("エラー", str(e))
 
-# 【修正】メッセージボックス（ポップアップ）を削除し、内部リセットのみに変更
 def reset_crop_regions():
     state.selected_crop_regions = []
     if state.btn_select_crop:
