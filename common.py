@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.2.1"
+APP_TITLE, VERSION = "PdfEditMiya", "v2.2.2"
 WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
@@ -30,7 +30,11 @@ SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
-[ v2.2.0 ]
+[ v2.2.2 ]
+- 【UI改善】メイン画面のエンジン選択のラベルテキストを用途に合わせて分かりやすく修正しました。
+- 【バグ修正】初期設定読み込み時の出力フォーマット変数の初期化エラーを修正しました。
+
+[ v2.2.1 ]
 - 【バグ修正】Geminiデータ集約時に発生していた「NameError」およびアプリがエラー表示なく無言で終了する問題を修正しました。
 - 【バグ修正】処理中のエラー内容が画面上のポップアップ（メッセージボックス）で詳細に表示されるように改善しました。
 - 【機能改善】Geminiデータ集約処理でも、詳細設定画面で設定した「モデル」や「カスタムプロンプト」等の詳細設定が正しく引き継がれるように修正しました。
