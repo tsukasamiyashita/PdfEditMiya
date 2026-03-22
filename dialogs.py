@@ -127,6 +127,13 @@ def open_api_settings_dialog():
     }
 
     def apply_and_close():
+        # 【修正】メイン画面のプランインジケーター表示を更新
+        if state.plan_indicator:
+            plan = state.api_plan_var.get()
+            if plan == "free":
+                state.plan_indicator.config(text="🟢 無料枠 (Free)", foreground=COLOR_SUCCESS)
+            else:
+                state.plan_indicator.config(text="🔵 課金枠 (Paid)", foreground=PRIMARY)
         dialog.destroy()
 
     def has_changes():
@@ -679,6 +686,7 @@ def open_crop_selector():
     try: CropSelector(state.root, pdf_files[0])
     except Exception as e: messagebox.showerror("エラー", str(e))
 
+# 【修正】メッセージボックス（ポップアップ）を削除し、内部リセットのみに変更
 def reset_crop_regions():
     state.selected_crop_regions = []
     if state.btn_select_crop:
