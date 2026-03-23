@@ -404,7 +404,7 @@ def open_api_settings_dialog():
                 model_combo.set(m[0]); break
         if not model_combo.get(): model_combo.set(current_val)
                 
-        def on_model_select(event=None, cb=model_combo, m_var=model_var):
+        def on_model_select(event=None, cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
             selected_display = cb.get()
             matched = False
             for m in models:
@@ -414,6 +414,23 @@ def open_api_settings_dialog():
                     break
             if not matched:
                 m_var.set(selected_display)
+                
+            # モデル変更に合わせてRPMとスレッド数を推奨値に自動更新
+            model_id = m_var.get().lower()
+            if "pro" in model_id:
+                if is_f:
+                    r_var.set(1)
+                    t_var.set(1)
+                else:
+                    r_var.set(150)
+                    t_var.set(5)
+            else:
+                if is_f:
+                    r_var.set(12)
+                    t_var.set(1)
+                else:
+                    r_var.set(300)
+                    t_var.set(5)
                 
         model_combo.bind("<<ComboboxSelected>>", on_model_select)
         model_combo.bind("<FocusOut>", on_model_select)
@@ -553,27 +570,58 @@ def open_api_settings_dialog():
             col_widths_plan = [150, 360, 360]
             create_table(scrollable_frame, headers_plan, data_plan, col_widths_plan)
 
+            # 動的テーブルデータの生成 (現在のmodelsリストに基づく)
+            KNOWN_MODEL_INFO = {
+                "gemini-3.1-pro-preview": {
+                    "limit": ["非常に厳しい (2 RPM未満など)\n[推奨: 1 RPM / 直列(1)]", "時期・モデルにより変動\n[推奨: 150 RPM / 並列(5)]"],
+                    "desc": ["最新鋭・最高精度モデル", "複雑な表の構造解析、かすれた手書き文字の正確な読み取り、論理推論", "複雑なレイアウトのPDF、絶対にミスが許されないデータ抽出"]
+                },
+                "gemini-3-flash": {
+                    "limit": ["15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                    "desc": ["高速・高性能バランス型", "スピードと精度の高い両立、画像認識（マルチモーダル）", "一般的な図面管理台帳やPDFのテキスト・表抽出（デフォルト推奨）"]
+                },
+                "gemini-3.1-flash-lite-preview": {
+                    "limit": ["15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                    "desc": ["最軽量・低コストモデル", "圧倒的な処理スピードと低コスト（Proの約1/8の価格）", "画質が良いPDFの単純なテキスト抽出、大量データを安価に処理したい場合"]
+                },
+                "gemini-2.5-flash": {
+                    "limit": ["15 RPM\n[2026年6月に廃止予定]", "1000 RPM\n[2026年6月に廃止予定]"],
+                    "desc": ["前世代の標準モデル", "（※2026年6月17日に廃止予定のため移行を推奨）", "過去の互換性維持のため"]
+                },
+                "gemini-2.5-pro": {
+                    "limit": ["2 RPM\n[2026年6月に廃止予定]", "360 RPM\n[2026年6月に廃止予定]"],
+                    "desc": ["前世代の高精度モデル", "（※2026年6月17日に廃止予定のため移行を推奨）", "過去の互換性維持のため"]
+                }
+            }
+
+            data_limit = []
+            data_model = []
+
+            for m_display, m_id in models:
+                info = KNOWN_MODEL_INFO.get(m_id)
+                if not info:
+                    # 完全一致しない場合は部分一致で探す
+                    for known_id, known_data in KNOWN_MODEL_INFO.items():
+                        if known_id in m_id:
+                            info = known_data
+                            break
+                
+                if info:
+                    data_limit.append([m_display, info["limit"][0], info["limit"][1]])
+                    data_model.append([m_display, info["desc"][0], info["desc"][1], info["desc"][2]])
+                else:
+                    data_limit.append([m_display, "詳細は公式ドキュメントを参照", "詳細は公式ドキュメントを参照"])
+                    data_model.append([m_display, "APIから取得した追加モデル", "-", "最新機能を試したい場合"])
+
             ttk.Label(scrollable_frame, text="▼ 各モデルの制限目安 (RPM と 推奨スレッド数)", font=("Segoe UI", 11, "bold"), background=BG_COLOR, foreground=TEXT_COLOR).pack(anchor="w", padx=20, pady=(15, 0))
             
             headers_limit = ["モデル名", "無料枠の制限目安\n(RPM / スレッド数)", "課金枠の制限目安\n(RPM / スレッド数)"]
-            data_limit = [
-                ["Gemini 3.1 Pro Preview", "非常に厳しい (2 RPM未満など)\n[推奨: 1 RPM / 直列(1)]", "時期・モデルにより変動\n[推奨: 150 RPM / 並列(5)]"],
-                ["Gemini 3 Flash", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                ["Gemini 3.1 Flash-Lite", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                ["Gemini 2.5 シリーズ", "15 RPM (Flash) / 2 RPM (Pro)\n[2026年6月に廃止予定]", "1000 RPM (Flash) / 360 RPM (Pro)\n[2026年6月に廃止予定]"]
-            ]
             col_widths_limit = [200, 335, 335]
             create_table(scrollable_frame, headers_limit, data_limit, col_widths_limit)
 
             ttk.Label(scrollable_frame, text="▼ 各モデルの特徴と適した用途", font=("Segoe UI", 11, "bold"), background=BG_COLOR, foreground=TEXT_COLOR).pack(anchor="w", padx=20, pady=(15, 0))
             
             headers_model = ["モデル名", "特徴", "得意なこと", "適した用途"]
-            data_model = [
-                ["Gemini 3.1 Pro Preview", "最新鋭・最高精度モデル", "複雑な表の構造解析、かすれた手書き文字の正確な読み取り、論理推論", "複雑なレイアウトのPDF、絶対にミスが許されないデータ抽出"],
-                ["Gemini 3 Flash", "高速・高性能バランス型", "スピードと精度の高い両立、画像認識（マルチモーダル）", "一般的な図面管理台帳やPDFのテキスト・表抽出（デフォルト推奨）"],
-                ["Gemini 3.1 Flash-Lite", "最軽量・低コストモデル", "圧倒的な処理スピードと低コスト（Proの約1/8の価格）", "画質が良いPDFの単純なテキスト抽出、大量データを安価に処理したい場合"],
-                ["Gemini 2.5 シリーズ", "前世代のモデル", "（※2026年6月17日に廃止予定のため移行を推奨）", "過去の互換性維持のため"]
-            ]
             col_widths_model = [160, 140, 270, 290]
             create_table(scrollable_frame, headers_model, data_model, col_widths_model)
 
