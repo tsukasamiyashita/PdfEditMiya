@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, sys, re, warnings
+import os, sys, re, warnings, json, webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox, Menu
 import fitz
@@ -10,6 +10,48 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import google.generativeai as genai
 
 from common import *
+
+MODELS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_models.json")
+
+def load_models_list():
+    default_models = [
+        ("Gemini 3 Flash", "gemini-3-flash"),
+        ("Gemini 3.1 Pro Preview", "gemini-3.1-pro-preview"),
+        ("Gemini 3.1 Flash-Lite Preview", "gemini-3.1-flash-lite-preview"),
+        ("Gemini 2.5 Flash", "gemini-2.5-flash"),
+        ("Gemini 2.5 Pro", "gemini-2.5-pro")
+    ]
+    if os.path.exists(MODELS_FILE):
+        try:
+            with open(MODELS_FILE, "r", encoding="utf-8") as f:
+                saved_models = json.load(f)
+                
+                # 既存の保存データとマージしつつ、過去の長い特徴文があれば削除してシンプルにする
+                default_dict = {m[1]: m[0] for m in default_models}
+                merged_models = []
+                for m in saved_models:
+                    model_id = m[1]
+                    if model_id in default_dict:
+                        merged_models.append((default_dict[model_id], model_id))
+                        del default_dict[model_id]
+                    else:
+                        # 過去の長い説明文（" - " 以降）を削除
+                        display_name = m[0].split(" - ")[0]
+                        merged_models.append((display_name, model_id))
+                # ファイルになかった新しいデフォルトモデルを追加
+                for k, v in default_dict.items():
+                    merged_models.append((v, k))
+                return merged_models
+        except:
+            pass
+    return default_models
+
+def save_models_list(models_list):
+    try:
+        with open(MODELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(models_list, f, ensure_ascii=False, indent=2)
+    except:
+        pass
 
 # ==============================
 # UI共通コンポーネント
@@ -100,7 +142,7 @@ def open_api_settings_dialog():
     screen_h = state.root.winfo_screenheight()
     screen_w = state.root.winfo_screenwidth()
     
-    dialog_w = min(1050, screen_w - 40)
+    dialog_w = min(1200, screen_w - 40)
     dialog_h = min(780, screen_h - 80) 
     dialog.geometry(f"{dialog_w}x{dialog_h}") 
     dialog.configure(bg=BG_COLOR)
@@ -115,6 +157,8 @@ def open_api_settings_dialog():
     dialog.geometry(f"+{x}+{y}")
 
     fav_lists = []
+    models = load_models_list()
+    model_combos = []
 
     def update_all_fav_lists():
         for f_list in fav_lists:
@@ -265,14 +309,6 @@ def open_api_settings_dialog():
     notebook.add(tab_free, text=" 🟢 無料枠 (Free Tier) の設定 ")
     notebook.add(tab_paid, text=" 🔵 課金枠 (Paid Tier) の設定 ")
 
-    models = [
-        ("Gemini 3 Flash (高速・万能 / 新推奨)", "gemini-3-flash"),
-        ("Gemini 3.1 Pro Preview (最高精度)", "gemini-3.1-pro-preview"),
-        ("Gemini 3.1 Flash-Lite Preview (最軽量・低コスト)", "gemini-3.1-flash-lite-preview"),
-        ("Gemini 2.5 Flash (旧推奨 ※26年6月廃止)", "gemini-2.5-flash"),
-        ("Gemini 2.5 Pro (旧主力 ※26年6月廃止)", "gemini-2.5-pro")
-    ]
-
     def build_tab(parent_tab, plan_type):
         is_free = (plan_type == "free")
         key_var = state.api_key_free_var if is_free else state.api_key_paid_var
@@ -292,7 +328,8 @@ def open_api_settings_dialog():
         
         ttk.Label(key_inner, text=f"{plan_type.capitalize()} 用のAPIキー:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
         
-        entry_key = ttk.Entry(key_inner, textvariable=key_var, width=55, show="*")
+        # フィールド幅の拡大
+        entry_key = ttk.Entry(key_inner, textvariable=key_var, width=70, show="*")
         entry_key.pack(side=tk.LEFT, padx=(0, 5))
         entry_key.bind("<Button-3>", lambda e, widget=entry_key: show_context_menu(e, widget))
         
@@ -344,30 +381,102 @@ def open_api_settings_dialog():
 
         middle_frame = ttk.Frame(parent_tab, style="Main.TFrame")
         middle_frame.pack(fill=tk.X, padx=10, pady=5)
-        middle_frame.columnconfigure(0, weight=1)
-        middle_frame.columnconfigure(1, weight=1)
+        
+        # モデル選択欄が広く表示されるように、左側のカラムの比重を大きく設定
+        middle_frame.columnconfigure(0, weight=3)
+        middle_frame.columnconfigure(1, weight=2)
 
         perf_frame = ttk.LabelFrame(middle_frame, text=" ② モデル・パフォーマンス設定 ", style="Card.TLabelframe", padding=8)
         perf_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
         model_inner = ttk.Frame(perf_frame, style="Card.TFrame")
-        model_inner.pack(fill=tk.X, pady=(0, 5))
+        model_inner.pack(fill=tk.X, pady=(0, 2))
         
         ttk.Label(model_inner, text="使用モデル:", width=10, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
-        model_combo = ttk.Combobox(model_inner, values=[m[0] for m in models], state="readonly", width=42)
+        
+        # 特徴文がすべて入りきるようにコンボボックス幅を拡張
+        model_combo = ttk.Combobox(model_inner, values=[m[0] for m in models], width=70)
+        model_combos.append(model_combo)
+        
         current_val = model_var.get()
         for m in models:
             if m[1] == current_val:
                 model_combo.set(m[0]); break
-        if not model_combo.get(): model_combo.set(models[0][0])
+        if not model_combo.get(): model_combo.set(current_val)
                 
-        def on_model_select(event, cb=model_combo, m_var=model_var):
+        def on_model_select(event=None, cb=model_combo, m_var=model_var):
             selected_display = cb.get()
+            matched = False
             for m in models:
                 if m[0] == selected_display:
-                    m_var.set(m[1]); break
+                    m_var.set(m[1])
+                    matched = True
+                    break
+            if not matched:
+                m_var.set(selected_display)
+                
         model_combo.bind("<<ComboboxSelected>>", on_model_select)
-        model_combo.pack(side=tk.LEFT)
+        model_combo.bind("<FocusOut>", on_model_select)
+        # ドロップダウンの幅が画面いっぱいに広がり、全文が見えるように最大限自動拡張する
+        model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        def fetch_models(k_var=key_var):
+            key = k_var.get().strip()
+            if not key:
+                messagebox.showwarning("警告", "最新モデルを取得するには、APIキーを入力してください。", parent=dialog)
+                return
+            try:
+                btn_fetch_models.config(text="取得中...", state=tk.DISABLED)
+                dialog.update()
+                
+                genai.configure(api_key=key)
+                new_models = []
+
+                for m in genai.list_models():
+                    if "generateContent" in m.supported_generation_methods and "gemini" in m.name:
+                        model_name = m.name.replace("models/", "")
+                        
+                        # テキスト出力以外の特化モデル（音声、画像生成、埋め込みなど）を除外
+                        exclude_keywords = ["tts", "audio", "image", "vision", "embedding"]
+                        if any(k in model_name.lower() for k in exclude_keywords):
+                            continue
+
+                        display_name = m.display_name
+                        # シンプルに表示名とモデルIDだけをリストに追加（特徴文の追記は廃止）
+                        new_models.append((f"{display_name} ({model_name})", model_name))
+                
+                if new_models:
+                    models.clear()
+                    models.extend(new_models)
+                    save_models_list(models)
+                    for cb in model_combos:
+                        cb.config(values=[m[0] for m in models])
+                        
+                    # 無料枠・課金枠両方のコンボボックスの現在選択中の表示テキストをリフレッシュ
+                    for m_var_ref, cb_ref in [(state.gemini_model_free_var, model_combos[0]), (state.gemini_model_paid_var, model_combos[1])]:
+                        current_model_id = m_var_ref.get()
+                        for new_m in models:
+                            if new_m[1] == current_model_id:
+                                cb_ref.set(new_m[0])
+                                break
+
+                    messagebox.showinfo("更新完了", f"最新のモデルリスト ({len(models)}件) をAPIから取得しました！\nコンボボックスの選択肢が更新されました。", parent=dialog)
+                else:
+                    messagebox.showinfo("情報", "取得可能なモデルが見つかりませんでした。", parent=dialog)
+            except Exception as e:
+                messagebox.showerror("エラー", f"モデルリストの取得に失敗しました。\n詳細: {e}", parent=dialog)
+            finally:
+                btn_fetch_models.config(text="🌐 更新", state=tk.NORMAL)
+
+        btn_fetch_models = ttk.Button(model_inner, text="🌐 更新", width=8, command=fetch_models)
+        btn_fetch_models.pack(side=tk.LEFT, padx=(5, 0))
+
+        # URLリンクを追加
+        link_inner = ttk.Frame(perf_frame, style="Card.TFrame")
+        link_inner.pack(fill=tk.X, pady=(0, 5))
+        lbl_link = ttk.Label(link_inner, text="🔗 各モデルの特徴を確認する (公式)", cursor="hand2", foreground=PRIMARY, font=("Segoe UI", 9, "underline"), background=CARD_BG)
+        lbl_link.pack(side=tk.RIGHT, padx=5)
+        lbl_link.bind("<Button-1>", lambda e: webbrowser.open_new("https://ai.google.dev/gemini-api/docs/models/gemini"))
 
         speed_inner = ttk.Frame(perf_frame, style="Card.TFrame")
         speed_inner.pack(fill=tk.X, pady=2)
@@ -483,6 +592,7 @@ def open_api_settings_dialog():
         def reset_perf(cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
             target_model_val = "gemini-3.1-flash-lite-preview"
             m_var.set(target_model_val)
+            cb.set(target_model_val)
             for m in models:
                 if m[1] == target_model_val:
                     cb.set(m[0])
