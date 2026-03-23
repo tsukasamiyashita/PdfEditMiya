@@ -266,11 +266,11 @@ def open_api_settings_dialog():
     notebook.add(tab_paid, text=" 🔵 課金枠 (Paid Tier) の設定 ")
 
     models = [
-        ("Gemini 2.5 Flash (高速・万能 / 推奨)", "gemini-2.5-flash"),
-        ("Gemini 2.5 Pro (主力・高精度)", "gemini-2.5-pro"),
-        ("Gemini 2.5 Flash-Lite (最軽量・低コスト)", "gemini-2.5-flash-8b"),
-        ("Gemini 3.1 Pro Preview (次世代プレビュー)", "gemini-3.1-pro-preview"),
-        ("Gemini 3.0 Flash Preview (次世代プレビュー)", "gemini-3.0-flash-preview")
+        ("Gemini 3 Flash (高速・万能 / 新推奨)", "gemini-3-flash"),
+        ("Gemini 3.1 Pro Preview (最高精度)", "gemini-3.1-pro-preview"),
+        ("Gemini 3.1 Flash-Lite Preview (最軽量・低コスト)", "gemini-3.1-flash-lite-preview"),
+        ("Gemini 2.5 Flash (旧推奨 ※26年6月廃止)", "gemini-2.5-flash"),
+        ("Gemini 2.5 Pro (旧主力 ※26年6月廃止)", "gemini-2.5-pro")
     ]
 
     def build_tab(parent_tab, plan_type):
@@ -438,7 +438,7 @@ def open_api_settings_dialog():
             headers_plan = ["比較項目", "無料枠 (Free Tier)", "課金枠 (Paid Tier)"]
             data_plan = [
                 ["利用料金", "完全無料（クレジットカード登録不要）", "従量課金（トークンと呼ばれるデータ量に応じて支払い）"],
-                ["利用できるモデル", "2.5 Pro, 2.5 Flash, 3 Flash など", "すべてのモデル（3.1 Pro Previewなども利用可）"],
+                ["利用できるモデル", "3 Flash, 3.1 Flash-Lite, 2.5 Pro など", "すべてのモデル（3.1 Pro Previewなども利用可）"],
                 ["データの\nプライバシー", "入力データがGoogleのAI学習に利用される可能性がある", "入力データはAI学習に利用されない"]
             ]
             col_widths_plan = [150, 360, 360]
@@ -448,10 +448,10 @@ def open_api_settings_dialog():
             
             headers_limit = ["モデル名", "無料枠の制限目安\n(RPM / スレッド数)", "課金枠の制限目安\n(RPM / スレッド数)"]
             data_limit = [
-                ["Gemini 2.5 Pro", "2 RPM, 50 RPD\n[推奨: 2 RPM / 直列(1)]", "360 RPM\n[推奨: 150 RPM / 並列(5〜)]"],
-                ["Gemini 2.5 Flash", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                ["Gemini 2.5 Flash-Lite", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                ["Gemini 3.1 Pro Preview\n/ 3.0 Flash Preview", "非常に厳しい (2 RPM未満など)\n[推奨: 1 RPM / 直列(1)]", "時期・モデルにより変動\n[推奨: 150 RPM / 並列(5)]"]
+                ["Gemini 3.1 Pro Preview", "非常に厳しい (2 RPM未満など)\n[推奨: 1 RPM / 直列(1)]", "時期・モデルにより変動\n[推奨: 150 RPM / 並列(5)]"],
+                ["Gemini 3 Flash", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                ["Gemini 3.1 Flash-Lite", "15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                ["Gemini 2.5 シリーズ", "15 RPM (Flash) / 2 RPM (Pro)\n[2026年6月に廃止予定]", "1000 RPM (Flash) / 360 RPM (Pro)\n[2026年6月に廃止予定]"]
             ]
             col_widths_limit = [200, 335, 335]
             create_table(scrollable_frame, headers_limit, data_limit, col_widths_limit)
@@ -460,10 +460,10 @@ def open_api_settings_dialog():
             
             headers_model = ["モデル名", "特徴", "得意なこと", "適した用途"]
             data_model = [
-                ["Gemini 2.5 Pro", "主力・高精度モデル", "複雑な論理的推論、高度なプログラミング、非常に長い文章の文脈理解", "複雑な問題を解かせるAIアシスタント、コード生成・レビュー、大量の資料の要約・分析"],
-                ["Gemini 2.5 Flash", "高速・万能モデル", "スピードと性能のバランスが良く、画像・動画・音声の認識（マルチモーダル）にも強い", "一般的なチャットボット、リアルタイム応答、画像内容解析（日常的なAI開発向け）"],
-                ["Gemini 2.5 Flash-Lite", "最軽量・低コストモデル", "応答スピードが非常に速く、APIの利用コストが最も安い", "単純なテキスト分類、短い文章の翻訳、大量データを安価に高速処理したい場合"],
-                ["Gemini 3.1 Pro Preview\n/ 3.0 Flash Preview", "次世代プレビュー版", "新しいアーキテクチャや最先端の推論能力の提供", "最新鋭のモデルをいち早く試したい開発者向け"]
+                ["Gemini 3.1 Pro Preview", "最新鋭・最高精度モデル", "複雑な表の構造解析、かすれた手書き文字の正確な読み取り、論理推論", "複雑なレイアウトのPDF、絶対にミスが許されないデータ抽出"],
+                ["Gemini 3 Flash", "高速・高性能バランス型", "スピードと精度の高い両立、画像認識（マルチモーダル）", "一般的な図面管理台帳やPDFのテキスト・表抽出（デフォルト推奨）"],
+                ["Gemini 3.1 Flash-Lite", "最軽量・低コストモデル", "圧倒的な処理スピードと低コスト（Proの約1/8の価格）", "画質が良いPDFの単純なテキスト抽出、大量データを安価に処理したい場合"],
+                ["Gemini 2.5 シリーズ", "前世代のモデル", "（※2026年6月17日に廃止予定のため移行を推奨）", "過去の互換性維持のため"]
             ]
             col_widths_model = [160, 140, 270, 290]
             create_table(scrollable_frame, headers_model, data_model, col_widths_model)
@@ -480,18 +480,22 @@ def open_api_settings_dialog():
         btn_show_limit = ttk.Button(perf_action_inner, text="ℹ️ 制限と仕様を確認", command=lambda m=model_var, f=is_free: show_limit_info(m, f))
         btn_show_limit.pack(side=tk.LEFT)
 
-        def reset_perf(m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
-            model = m_var.get()
+        def reset_perf(cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
+            target_model_val = "gemini-3.1-flash-lite-preview"
+            m_var.set(target_model_val)
+            for m in models:
+                if m[1] == target_model_val:
+                    cb.set(m[0])
+                    break
+            
             if is_f:
-                if "pro" in model: r_var.set(2)
-                else: r_var.set(12)
+                r_var.set(12)
                 t_var.set(1) 
             else:
-                if "pro" in model: r_var.set(150)
-                else: r_var.set(300)
+                r_var.set(300)
                 t_var.set(5) 
                     
-        btn_reset_perf = ttk.Button(perf_action_inner, text="🔄 推奨値", command=lambda m=model_var, r=rpm_var, t=threads_var, f=is_free: reset_perf(m, r, t, f))
+        btn_reset_perf = ttk.Button(perf_action_inner, text="🔄 推奨値", command=lambda cb=model_combo, m=model_var, r=rpm_var, t=threads_var, f=is_free: reset_perf(cb, m, r, t, f))
         btn_reset_perf.pack(side=tk.RIGHT)
 
         param_frame = ttk.LabelFrame(middle_frame, text=" ③ AI抽出パラメータ設定 ", style="Card.TLabelframe", padding=8)

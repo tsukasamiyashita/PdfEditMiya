@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.2.2"
+APP_TITLE, VERSION = "PdfEditMiya", "v2.3.0"
 WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
@@ -30,6 +30,11 @@ SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
+[ v2.3.0 ]
+- 【機能追加】最新の次世代モデルである「Gemini 3 Flash」「Gemini 3.1 Pro Preview」「Gemini 3.1 Flash-Lite Preview」に対応しました。
+- 【機能変更】2026年6月のモデル廃止予定に伴い、デフォルトの推奨モデルを「Gemini 3 Flash」に移行しました。
+- 【機能改善】詳細設定画面で「推奨値」ボタンを押した際、無料枠・課金枠ともに最軽量・低コストな「Gemini 3.1 Flash-Lite Preview」が選択され、それぞれに最適なRPMとスレッド数が自動設定されるように改善しました。
+
 [ v2.2.2 ]
 - 【UI改善】メイン画面のエンジン選択のラベルテキストを用途に合わせて分かりやすく修正しました。
 - 【バグ修正】初期設定読み込み時の出力フォーマット変数の初期化エラーを修正しました。
