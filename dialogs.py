@@ -2,6 +2,7 @@
 import os, sys, re, warnings, json, webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox, Menu
+import tkinter.scrolledtext as st
 import fitz
 from PIL import Image, ImageTk
 
@@ -926,3 +927,86 @@ def reset_crop_regions():
     state.selected_crop_regions = []
     if state.btn_select_crop:
         state.btn_select_crop.config(text="抽出範囲を選択")
+
+# ==============================
+# PDFデータ確認ツール (PDFアナライザー)
+# ==============================
+def show_pdf_type_info():
+    files = state.selected_files if state.current_mode == "file" else ([os.path.join(state.selected_folder, f) for f in os.listdir(state.selected_folder) if f.lower().endswith(".pdf")] if state.selected_folder else [])
+    pdf_files = [f for f in files if f.lower().endswith('.pdf')]
+    
+    if not pdf_files:
+        messagebox.showinfo("情報", "確認するPDFファイルが選択されていません。")
+        return
+        
+    win = tk.Toplevel(state.root)
+    win.title("🔍 PDFの内部データ構造 確認結果")
+    win.geometry("750x550")
+    win.configure(bg=BG_COLOR)
+    
+    x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - 375
+    y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - 275
+    win.geometry(f"+{x}+{y}")
+    win.grab_set()
+
+    lbl = ttk.Label(win, text="選択されたPDFのデータ構造を解析しています...", font=("Segoe UI", 11, "bold"), background=BG_COLOR, foreground=PRIMARY)
+    lbl.pack(pady=10)
+    
+    text_area = st.ScrolledText(win, wrap=tk.WORD, font=("Meiryo UI", 10), bg=CARD_BG, fg=TEXT_COLOR, relief=tk.FLAT, padx=15, pady=15)
+    text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0, 10))
+    
+    btn_close = ttk.Button(win, text="閉じる", command=win.destroy)
+    btn_close.pack(pady=(0, 10))
+
+    def run_analysis():
+        results = []
+        max_files_to_check = 50 
+        
+        text_area.insert(tk.END, f"対象ファイル数: {len(pdf_files)} 件\n\n")
+        
+        for i, pdf_path in enumerate(pdf_files[:max_files_to_check]):
+            filename = os.path.basename(pdf_path)
+            try:
+                doc = fitz.open(pdf_path)
+                if len(doc) == 0:
+                    res = "不明 (空のPDF)"
+                    engine = "👉 解析不能"
+                else:
+                    text_score = 0
+                    vector_score = 0
+                    pages_to_check = min(3, len(doc)) 
+                    for p_idx in range(pages_to_check):
+                        page = doc[p_idx]
+                        if len(page.get_text().strip()) > 30: text_score += 1
+                        if len(page.get_drawings()) > 5: vector_score += 1
+                    
+                    if text_score > 0 and vector_score > 0:
+                        res = "テキストデータ ＆ ベクターデータ (CAD等からのデジタル生成PDF)"
+                        engine = "👉 推奨エンジン: Python標準ライブラリ"
+                    elif text_score > 0:
+                        res = "テキストデータ (Word/Excel等からのデジタル生成PDF)"
+                        engine = "👉 推奨エンジン: Python標準ライブラリ"
+                    elif vector_score > 0:
+                        res = "ベクターデータ (文字はアウトライン化されている可能性あり)"
+                        engine = "👉 推奨エンジン: Python標準ライブラリ または Gemini API"
+                    else:
+                        res = "ラスターデータのみ (スキャンされたPDFや画像のみ)"
+                        engine = "👉 推奨エンジン: Gemini API (超高精度AI) または Tesseract"
+                doc.close()
+                results.append(f"📄 {filename}\n   構造: {res}\n   {engine}\n")
+            except Exception as e:
+                results.append(f"📄 {filename}\n   ❌ 解析エラー: {e}\n")
+                
+            text_area.delete(1.0, tk.END)
+            text_area.insert(tk.END, f"対象ファイル数: {len(pdf_files)} 件\n")
+            if len(pdf_files) > max_files_to_check:
+                text_area.insert(tk.END, f"※ファイル数が多いため、最初の {max_files_to_check} 件のみをサンプリング解析します。\n")
+            text_area.insert(tk.END, "-" * 50 + "\n\n")
+            text_area.insert(tk.END, "\n".join(results))
+            text_area.see(tk.END)
+            win.update_idletasks()
+
+        lbl.config(text="解析が完了しました。")
+        text_area.configure(state=tk.DISABLED)
+
+    win.after(100, run_analysis)
