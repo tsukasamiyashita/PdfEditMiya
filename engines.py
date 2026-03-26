@@ -265,6 +265,32 @@ def convert_to_dxf(files, save_dir, options, ui):
             dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
         except Exception as e: print(f"DXF Conversion Error: {e}")
 
+
+# ==============================
+# 画像前処理タスク (OCR精度向上)
+# ==============================
+def preprocess_image_for_ocr(img_array):
+    """Tesseract OCRの認識精度を向上させるための画像前処理"""
+    # 1. グレースケール化
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+        
+    # 2. コントラスト強調 (CLAHE: 白黒をはっきりさせる)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    
+    # 3. ノイズ除去 (スキャン時のざらつき・ごま塩ノイズを滑らかにする)
+    gray = cv2.medianBlur(gray, 3)
+    
+    # 4. 適応的二値化 (影や紙の黄ばみによるムラを無くし、完全な白と黒にする)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
+    
+    return binary
+
 # ==============================
 # ローカルOCR抽出タスク (Tesseract)
 # ==============================
@@ -292,6 +318,7 @@ def extract_tesseract_task(files, save_dir, options, ui):
         for page_num in range(total_pages):
             if ui.is_cancelled(): return
             ui.set_indeterminate(f"Tesseractで解析中... ( {page_num+1} / {total_pages} ページ )")
+            # dpi=300 で高解像度化して読み込む
             pix = doc[page_num].get_pixmap(dpi=300)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
             if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
@@ -307,7 +334,13 @@ def extract_tesseract_task(files, save_dir, options, ui):
             all_regions_data = []
             for crop_img in cropped_images:
                 try:
-                    text = pytesseract.image_to_string(Image.fromarray(crop_img), lang="jpn+eng")
+                    # Tesseractの精度を上げるために画像前処理を適用
+                    processed_img = preprocess_image_for_ocr(crop_img)
+                    
+                    # Tesseractで文字認識 (横書き・縦書き対応、自動ページセグメンテーション)
+                    custom_config = r'--oem 3 --psm 3'
+                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config)
+                    
                     lines = [line.strip() for line in text.split('\n') if line.strip()]
                     if lines:
                         if (crop_regions and crop_img.shape[0] > crop_img.shape[1] * 1.5) or (len(lines) > 1 and all(len(l) <= 2 for l in lines)):
