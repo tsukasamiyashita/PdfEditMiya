@@ -143,13 +143,11 @@ def extract_text_internal(files, save_dir, options, ui):
         with pdfplumber.open(f) as pdf:
             for j, p in enumerate(pdf.pages, 1):
                 ui.set_determinate(j, len(pdf.pages), f"テキストを抽出中... ( {j} / {len(pdf.pages)} ページ )")
-                # ページ内にテキストオブジェクトがあるかチェック
                 if not p.chars: is_scanned_pdf = True
                 
                 if crop_regions:
                     page_texts = []
                     for idx, (rx1, ry1, rx2, ry2) in enumerate(crop_regions, 1):
-                        # 0.5%のマージンを追加して境界判定を強化
                         m = 0.005
                         x0 = max(0, min(rx1, rx2) - m) * p.width
                         top = max(0, min(ry1, ry2) - m) * p.height
@@ -195,7 +193,6 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                 if crop_regions:
                     all_regions_data = []
                     for (rx1, ry1, rx2, ry2) in crop_regions:
-                        # マージンを追加
                         m = 0.005
                         x0 = max(0, min(rx1, rx2) - m) * page.width
                         top = max(0, min(ry1, ry2) - m) * page.height
@@ -203,52 +200,36 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                         bottom = min(1, max(ry1, ry2) + m) * page.height
                         
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
-                        
-                        # ステップ1: 罫線ベースで抽出
                         tbls = cropped_page.extract_tables()
                         
-                        # ステップ2: 失敗した場合、テキストの配置ベース(文字のみ)で抽出を試みる
                         if not tbls:
                             tbl_settings = {"vertical_strategy": "text", "horizontal_strategy": "text", "snap_tolerance": 3}
                             tbls = cropped_page.extract_tables(table_settings=tbl_settings)
                         
-                        # ステップ3: それでもダメなら、単なるテキストとして抽出し行ごとに分割 (最終フォールバック)
                         if not tbls:
                             txt = cropped_page.extract_text()
                             if txt and txt.strip():
-                                # テキストを行で分割し、1列の表として扱う
                                 dummy_table = [[line] for line in txt.strip().split('\n')]
                                 tbls = [dummy_table]
                                 
                         region_table = []
                         if tbls:
-                            for tbl in tbls:
-                                region_table.extend(tbl)
+                            for tbl in tbls: region_table.extend(tbl)
                         
-                        # データが空の場合は空白セルを維持するため空の行を追加
-                        if not region_table:
-                            region_table = [[""]]
-                            
+                        if not region_table: region_table = [[""]]
                         all_regions_data.append(region_table)
                         
-                    # 複数範囲のデータを横に結合する
                     merged_table = merge_2d_arrays_horizontally(all_regions_data)
-                    
-                    # 全てが空かどうかチェック
                     is_empty = True
                     for row in merged_table:
                         for cell in row:
                             if cell and str(cell).strip():
-                                is_empty = False
-                                break
-                        if not is_empty:
-                            break
+                                is_empty = False; break
+                        if not is_empty: break
                             
-                    if not is_empty:
-                        tables = [merged_table]
+                    if not is_empty: tables = [merged_table]
                 else: 
                     tables = page.extract_tables()
-                    # ページ全体で表がない場合のフォールバック
                     if not tables:
                         txt = page.extract_text()
                         if txt and txt.strip():
@@ -256,7 +237,6 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                             tables = [dummy_table]
                 
                 if not tables: continue
-                
                 has_any_table = True
                 ws = wb.create_sheet(f"Page_{str(page_idx).zfill(digits)}"); current_row = 1
                 for table in tables:
@@ -273,10 +253,8 @@ def convert_to_excel_internal(files, save_dir, options, ui):
             wb.save(os.path.join(save_dir, f"{base_name}_Excel.xlsx"))
         else:
             empty_wb = Workbook(); ws = empty_wb.active; ws.title = "No_Data"
-            if is_scanned_pdf:
-                msg = "このPDFは「スキャンされた画像」です。Gemini APIまたはTesseractを使用してください。"
-            else:
-                msg = "指定範囲内に表構造やテキストデータが見つかりませんでした。"
+            if is_scanned_pdf: msg = "このPDFは「スキャンされた画像」です。Gemini APIまたはTesseractを使用してください。"
+            else: msg = "指定範囲内に表構造やテキストデータが見つかりませんでした。"
             ws.cell(row=1, column=1, value=msg)
             empty_wb.save(os.path.join(save_dir, f"{base_name}_Excel_NoData.xlsx"))
 
@@ -306,7 +284,6 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                         if not tbls:
                             tbls = cropped_page.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
                         
-                        # 最終フォールバック
                         if not tbls:
                             txt = cropped_page.extract_text()
                             if txt and txt.strip():
@@ -314,37 +291,27 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                                 
                         region_table = []
                         if tbls:
-                            for tbl in tbls:
-                                region_table.extend(tbl)
+                            for tbl in tbls: region_table.extend(tbl)
                                 
-                        if not region_table:
-                            region_table = [[""]]
-                            
+                        if not region_table: region_table = [[""]]
                         all_regions_data.append(region_table)
                         
-                    # 複数範囲のデータを横に結合する
                     merged_table = merge_2d_arrays_horizontally(all_regions_data)
-                    
                     is_empty = True
                     for row in merged_table:
                         for cell in row:
                             if cell and str(cell).strip():
-                                is_empty = False
-                                break
-                        if not is_empty:
-                            break
+                                is_empty = False; break
+                        if not is_empty: break
                             
-                    if not is_empty:
-                        tables = [merged_table]
+                    if not is_empty: tables = [merged_table]
                 else: 
                     tables = page.extract_tables()
                     if not tables:
                         txt = page.extract_text()
-                        if txt and txt.strip():
-                            tables = [[[line] for line in txt.strip().split('\n')]]
+                        if txt and txt.strip(): tables = [[[line] for line in txt.strip().split('\n')]]
                 
                 if not tables: continue
-                
                 has_any_table = True
                 with open(os.path.join(save_dir, f"{base}_Page_{str(page_idx).zfill(digits)}_CSV.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
                     writer = csv.writer(f_out)
@@ -455,14 +422,27 @@ def convert_to_dxf(files, save_dir, options, ui):
 # ==============================
 # 画像前処理タスク (OCR精度向上)
 # ==============================
-def preprocess_image_for_ocr(img_array):
+def preprocess_image_for_ocr(img_array, is_digital=False):
+    """
+    デジタルPDFとスキャンPDFで適切な前処理を自動で使い分ける
+    """
     if len(img_array.shape) == 3: gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     else: gray = img_array
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    gray = cv2.medianBlur(gray, 3)
-    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    return binary
+    
+    if is_digital:
+        # デジタル生成PDF（Excel等からの変換）の場合
+        # 元々クリアな文字なので、過剰な補正(適応的二値化や平滑化)を行うと逆に文字が劣化します。
+        # 大津の二値化のみを適用し、くっきりとした白黒画像にします。
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        return binary
+    else:
+        # スキャンされたPDFの場合
+        # 影や照明ムラを取り除くため、コントラストを強調してから適応的二値化を行います。
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+        # 解像度が高い(dpi=400)場合、文字の線が太くなるため、ブロックサイズを大きく(51)して太い文字の中抜けを防止します。
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 15)
+        return binary
 
 # ==============================
 # ローカルOCR抽出タスク (Tesseract)
@@ -490,7 +470,13 @@ def extract_tesseract_task(files, save_dir, options, ui):
         for page_num in range(total_pages):
             if ui.is_cancelled(): return
             ui.set_indeterminate(f"OCR解析中... ({page_num+1}/{total_pages}ページ)")
-            pix = doc[page_num].get_pixmap(dpi=300)
+            
+            # 【改善】PDFページ自体にテキストデータが埋め込まれているか(デジタルPDFか)を自動判定
+            page_obj = doc[page_num]
+            is_digital = bool(page_obj.get_text().strip())
+            
+            # 【改善】DPIを300から400に引き上げ、Tesseractの認識精度を向上（文字が小さい表などに効果絶大）
+            pix = page_obj.get_pixmap(dpi=400)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
             if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
             elif pix.n == 1: img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
@@ -507,8 +493,15 @@ def extract_tesseract_task(files, save_dir, options, ui):
             all_regions_data = []
             for crop_img in cropped_images:
                 try:
-                    processed_img = preprocess_image_for_ocr(crop_img)
-                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=r'--oem 3 --psm 3')
+                    # デジタルかスキャンかを渡して、最適な前処理を適用する
+                    processed_img = preprocess_image_for_ocr(crop_img, is_digital)
+                    
+                    # 【改善】範囲指定抽出(セル単位等)の場合は PSM 6 (均一なテキストブロック)、ページ全体の場合は PSM 3 を使用
+                    psm_val = 6 if crop_regions else 3
+                    custom_config = f'--oem 3 --psm {psm_val}'
+                    
+                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config)
+                    
                     if crop_regions:
                         text = text.strip()
                         if text: all_regions_data.append([[text]])
