@@ -200,16 +200,19 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                         bottom = min(1, max(ry1, ry2) + m) * page.height
                         
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
-                        tbls = cropped_page.extract_tables()
                         
-                        if not tbls:
-                            tbl_settings = {"vertical_strategy": "text", "horizontal_strategy": "text", "snap_tolerance": 3}
-                            tbls = cropped_page.extract_tables(table_settings=tbl_settings)
+                        tbls = []
+                        if options.get("extract_mode") != "text":
+                            tbls = cropped_page.extract_tables()
+                            if not tbls:
+                                tbl_settings = {"vertical_strategy": "text", "horizontal_strategy": "text", "snap_tolerance": 3}
+                                tbls = cropped_page.extract_tables(table_settings=tbl_settings)
                         
                         if not tbls:
                             txt = cropped_page.extract_text()
                             if txt and txt.strip():
-                                dummy_table = [[line] for line in txt.strip().split('\n')]
+                                lines = [line.strip() for line in txt.strip().split('\n') if line.strip()]
+                                dummy_table = [[line] for line in lines]
                                 tbls = [dummy_table]
                                 
                         region_table = []
@@ -219,7 +222,16 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                         if not region_table: region_table = [[""]]
                         all_regions_data.append(region_table)
                         
-                    merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                    if options.get("extract_mode") == "text":
+                        merged_row = []
+                        for region_data in all_regions_data:
+                            for r in region_data:
+                                for c in r:
+                                    if str(c).strip(): merged_row.append(str(c).strip())
+                        merged_table = [merged_row] if merged_row else [[""]]
+                    else:
+                        merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                        
                     is_empty = True
                     for row in merged_table:
                         for cell in row:
@@ -229,12 +241,19 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                             
                     if not is_empty: tables = [merged_table]
                 else: 
-                    tables = page.extract_tables()
+                    tables = []
+                    if options.get("extract_mode") != "text":
+                        tables = page.extract_tables()
+                        
                     if not tables:
                         txt = page.extract_text()
                         if txt and txt.strip():
-                            dummy_table = [[line] for line in txt.strip().split('\n')]
-                            tables = [dummy_table]
+                            lines = [line.strip() for line in txt.strip().split('\n') if line.strip()]
+                            if options.get("extract_mode") == "text":
+                                tables = [[lines]]
+                            else:
+                                dummy_table = [[line] for line in lines]
+                                tables = [dummy_table]
                 
                 if not tables: continue
                 has_any_table = True
@@ -280,14 +299,17 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                                               min(1, max(rx1, rx2)+m) * page.width, min(1, max(ry1, ry2)+m) * page.height)
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
                         
-                        tbls = cropped_page.extract_tables()
-                        if not tbls:
-                            tbls = cropped_page.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+                        tbls = []
+                        if options.get("extract_mode") != "text":
+                            tbls = cropped_page.extract_tables()
+                            if not tbls:
+                                tbls = cropped_page.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
                         
                         if not tbls:
                             txt = cropped_page.extract_text()
                             if txt and txt.strip():
-                                tbls = [[[line] for line in txt.strip().split('\n')]]
+                                lines = [line.strip() for line in txt.strip().split('\n') if line.strip()]
+                                tbls = [[[line] for line in lines]]
                                 
                         region_table = []
                         if tbls:
@@ -296,7 +318,16 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                         if not region_table: region_table = [[""]]
                         all_regions_data.append(region_table)
                         
-                    merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                    if options.get("extract_mode") == "text":
+                        merged_row = []
+                        for region_data in all_regions_data:
+                            for r in region_data:
+                                for c in r:
+                                    if str(c).strip(): merged_row.append(str(c).strip())
+                        merged_table = [merged_row] if merged_row else [[""]]
+                    else:
+                        merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                        
                     is_empty = True
                     for row in merged_table:
                         for cell in row:
@@ -306,10 +337,18 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                             
                     if not is_empty: tables = [merged_table]
                 else: 
-                    tables = page.extract_tables()
+                    tables = []
+                    if options.get("extract_mode") != "text":
+                        tables = page.extract_tables()
+                        
                     if not tables:
                         txt = page.extract_text()
-                        if txt and txt.strip(): tables = [[[line] for line in txt.strip().split('\n')]]
+                        if txt and txt.strip():
+                            lines = [line.strip() for line in txt.strip().split('\n') if line.strip()]
+                            if options.get("extract_mode") == "text":
+                                tables = [[lines]]
+                            else:
+                                tables = [[[line] for line in lines]]
                 
                 if not tables: continue
                 has_any_table = True
@@ -502,18 +541,24 @@ def extract_tesseract_task(files, save_dir, options, ui):
                     
                     text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config)
                     
-                    if crop_regions:
-                        text = text.strip()
-                        if text: all_regions_data.append([[text]])
-                        else: all_regions_data.append([[""]])
-                    else:
-                        lines = [l.strip() for l in text.split('\n') if l.strip()]
-                        if lines: all_regions_data.append([[l] for l in lines])
-                        else: all_regions_data.append([[""]])
+                    lines = [l.strip() for l in text.split('\n') if l.strip()]
+                    if lines: all_regions_data.append([[l] for l in lines])
+                    else: all_regions_data.append([[""]])
                 except Exception: all_regions_data.append([["Error"]])
                     
-            merged_data = merge_2d_arrays_horizontally(all_regions_data)
-            final_data = [["ページ番号"] + ([f"範囲{idx+1}" for idx in range(len(cropped_images))] if crop_regions else ["抽出テキスト"])]
+            if options.get("extract_mode") == "text":
+                merged_row = []
+                for region_data in all_regions_data:
+                    for r in region_data:
+                        for c in r:
+                            if str(c).strip(): merged_row.append(str(c).strip())
+                merged_data = [merged_row] if merged_row else [[""]]
+                max_cols = max((len(r) for r in merged_data), default=1)
+                final_data = [["ページ番号"] + [f"テキスト{i+1}" for i in range(max_cols)]]
+            else:
+                merged_data = merge_2d_arrays_horizontally(all_regions_data)
+                final_data = [["ページ番号"] + ([f"範囲{idx+1}" for idx in range(len(cropped_images))] if crop_regions else ["抽出テキスト"])]
+            
             for row in merged_data: final_data.append([f"{page_num+1}/{total_pages}"] + row)
             
             save_path = os.path.join(save_dir, f"{base}_P{page_num+1}_OCR")

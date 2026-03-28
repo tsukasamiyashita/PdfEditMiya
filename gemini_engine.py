@@ -34,8 +34,12 @@ def extract_gemini_task(files, save_dir, options, ui):
     models_to_try = options.get("models_to_try", ["gemini-2.5-flash"])
     out_format = options.get("out_format", "xlsx")
     crop_regions = options.get("crop_regions", [])
+    extract_mode = options.get("extract_mode", "table")
+    
+    # JSON（表）形式で抽出するかどうかを判定
+    is_table_format = out_format in ["csv", "xlsx", "json", "md", "docx"] and extract_mode == "table"
 
-    if out_format in ["csv", "xlsx", "json", "md", "docx"]:
+    if is_table_format:
         if crop_regions:
             # 複数領域を1枚の画像として送信するため、各領域のデータが独立した配列として返るようプロンプトを調整
             prompt = """
@@ -110,7 +114,7 @@ def extract_gemini_task(files, save_dir, options, ui):
         "max_output_tokens": max_tokens,
     }
     
-    if out_format in ["csv", "xlsx", "json", "md", "docx"]:
+    if is_table_format:
         generation_config = generation_config_base.copy()
         generation_config["response_mime_type"] = "application/json"
     else:
@@ -190,7 +194,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                 cropped_images = []
                 for (rx1, ry1, rx2, ry2) in crop_regions:
                     # 表データ以外の場合は、枠に接している文字が切れないよう輪郭ベースで枠を拡張する
-                    if out_format not in ["xlsx", "csv"]:
+                    if not is_table_format:
                         x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
                     else:
                         x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
@@ -334,7 +338,7 @@ def extract_gemini_task(files, save_dir, options, ui):
             # 3. 抽出データのパースと各領域への分配
             all_regions_data = []
             if success:
-                if out_format in ["xlsx", "csv", "json", "md", "docx"]:
+                if is_table_format:
                     try:
                         clean_text = extracted_text.strip()
                         json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
@@ -446,23 +450,39 @@ def extract_gemini_task(files, save_dir, options, ui):
                             if i < len(parts):
                                 val = parts[i].strip()
                                 if val:
-                                    all_regions_data.append([[val]])
+                                    lines = [l.strip() for l in val.split('\n') if l.strip()]
+                                    all_regions_data.append([lines] if lines else [[""]])
                                 else:
                                     all_regions_data.append([[""]])
                             else:
                                 all_regions_data.append([[""]])
                     else:
-                        all_regions_data.append([[line] for line in extracted_text.strip().split('\n')])
+                        lines = [line.strip() for line in extracted_text.strip().split('\n') if line.strip()]
+                        all_regions_data.append([lines] if lines else [[""]])
             else:
                 for _ in range(len(crop_regions) if crop_regions else 1):
                     all_regions_data.append([[f"AI抽出失敗: {last_error}"]])
                     
             # 4. ページデータの統合とファイル保存
-            merged_data = merge_2d_arrays_horizontally(all_regions_data)
+            if not is_table_format:
+                merged_row = []
+                for region_data in all_regions_data:
+                    for r in region_data:
+                        for c in r:
+                            if str(c).strip(): merged_row.append(str(c).strip())
+                merged_data = [merged_row] if merged_row else [[""]]
+            else:
+                merged_data = merge_2d_arrays_horizontally(all_regions_data)
+                
             final_data = []
             page_info_str = f"{page_num+1}/{total_p}"
             
-            if crop_regions:
+            if not is_table_format:
+                max_cols = max((len(r) for r in merged_data), default=1)
+                header = ["ページ番号"] + [f"テキスト{i+1}" for i in range(max_cols)]
+                final_data.append(header)
+                for row in merged_data: final_data.append([page_info_str] + row)
+            elif crop_regions:
                 header = ["ページ番号"]
                 if all_regions_data and merged_data:
                     # 分割されたセル数に合わせてヘッダーを動的に生成する
@@ -479,12 +499,9 @@ def extract_gemini_task(files, save_dir, options, ui):
                 final_data.append(header)
                 for row in merged_data: final_data.append([page_info_str] + row)
             else:
-                if out_format in ["xlsx", "csv", "json", "md", "docx"]:
-                    for r_idx, row in enumerate(merged_data):
-                        if r_idx == 0: final_data.append(["ページ番号"] + row)
-                        else: final_data.append([page_info_str] + row)
-                else:
-                    for row in merged_data: final_data.append([page_info_str] + row)
+                for r_idx, row in enumerate(merged_data):
+                    if r_idx == 0: final_data.append(["ページ番号"] + row)
+                    else: final_data.append([page_info_str] + row)
             
             # 元のファイル名（_Page_XX_AI抽出）のみを使用する（タイムスタンプは付与しない）
             save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_AI抽出")

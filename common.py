@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 # 基本設定 & カラーパレット
 # ==============================
 APP_TITLE, VERSION = "PdfEditMiya", "v2.6.0"
-WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750
+WINDOW_WIDTH, WINDOW_HEIGHT = 840, 600
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -282,6 +282,7 @@ class SharedState:
         self.save_option = None
         self.engine_var = None
         self.output_format_var = None
+        self.extract_mode_var = None # 抽出モード管理用変数を追加
         
         self.api_plan_var = None
         self.api_key_free_var = None
