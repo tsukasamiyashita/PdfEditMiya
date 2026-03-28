@@ -20,6 +20,8 @@ from common import (
     sanitize_excel_text
 )
 
+from engines import expand_crop_rect_for_intersecting_objects
+
 # ==============================
 # Gemini API データ抽出タスク
 # ==============================
@@ -42,18 +44,17 @@ def extract_gemini_task(files, save_dir, options, ui):
 
             【特別ルール（絶対厳守）】
             - 画像内に複数の領域がある場合、上から順番にそれぞれのデータを読み取ってください。
-            - 各領域の出力は「1つの配列（リスト）」にまとめます。列の分割（セル分け）は絶対にしないでください。
-            - 1行分のデータは、空白などで区切られていても分割せず、すべて1つの文字列としてまとめてください。
+            - 各領域内で意味的なデータの区切り（項目名と値、または別々の行など）がある場合は、改行で繋げずに、必ず配列（リスト）の別々の要素に分割（セル分け）して出力してください。
             - 縦書きのテキストは、必ず繋げて横書きの1つの文字列に変換してください。
             - 『〃』『...』『同上』などの同上を表す記号が記載されている場合は、空白扱いにせず、必ずその記号をそのまま出力してください。
 
             【出力形式（絶対厳守）】
             以下のように、画像内の領域の数と同じ要素数を持つ配列を `regions` キーの値として出力してください。
-            各要素は、その領域の各行のテキストを格納した配列です。
+            各要素は、その領域から抽出された各データを格納した配列です。
             {
               "regions": [
-                [ "領域1の1行目のテキスト...", "領域1の2行目のテキスト..." ],
-                [ "領域2の1行目のテキスト..." ]
+                [ "領域1のデータ1", "領域1のデータ2", "領域1のデータ3..." ],
+                [ "領域2のデータ1..." ]
               ]
             }
             """
@@ -188,7 +189,14 @@ def extract_gemini_task(files, save_dir, options, ui):
                 h, w = img_array.shape[:2]
                 cropped_images = []
                 for (rx1, ry1, rx2, ry2) in crop_regions:
-                    crop = img_array[int(min(ry1, ry2)*h):int(max(ry1, ry2)*h), int(min(rx1, rx2)*w):int(max(rx1, rx2)*w)]
+                    # 表データ以外の場合は、枠に接している文字が切れないよう輪郭ベースで枠を拡張する
+                    if out_format not in ["xlsx", "csv"]:
+                        x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
+                    else:
+                        x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
+                        x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
+                        
+                    crop = img_array[y1:y2, x1:x2]
                     cropped_images.append(crop)
                     cropped_info.append(crop.shape)
                 
@@ -201,9 +209,9 @@ def extract_gemini_task(files, save_dir, options, ui):
                     
                     current_y = 0
                     for img in cropped_images:
-                        h, w = img.shape[:2]
-                        combined_array[current_y:current_y+h, 0:w] = img
-                        current_y += h + 20
+                        h_crop, w_crop = img.shape[:2]
+                        combined_array[current_y:current_y+h_crop, 0:w_crop] = img
+                        current_y += h_crop + 20
                         
                     combined_img = Image.fromarray(combined_array)
             else:
@@ -394,7 +402,12 @@ def extract_gemini_task(files, save_dir, options, ui):
                                 if h_crop > w_crop * 1.5 and all(len(x.strip()) <= 2 for x in clean_rows if x.strip()): 
                                     page_data_to_write.append(["".join(clean_rows)])
                                 else:
-                                    for val in clean_rows: page_data_to_write.append([val])
+                                    # 改行で結合せず、そのままの配列を1行のデータとして扱う（セルごとに横並びに分割）
+                                    if clean_rows:
+                                        page_data_to_write.append(clean_rows)
+                                    else:
+                                        page_data_to_write.append([""])
+                                        
                                 all_regions_data.append(page_data_to_write)
                         else:
                             header = data.get("header", [])
@@ -431,7 +444,11 @@ def extract_gemini_task(files, save_dir, options, ui):
                         parts = [p.strip() for p in raw_parts if p.strip()]
                         for i in range(len(crop_regions)):
                             if i < len(parts):
-                                all_regions_data.append([[line] for line in parts[i].split('\n')])
+                                val = parts[i].strip()
+                                if val:
+                                    all_regions_data.append([[val]])
+                                else:
+                                    all_regions_data.append([[""]])
                             else:
                                 all_regions_data.append([[""]])
                     else:
@@ -446,7 +463,19 @@ def extract_gemini_task(files, save_dir, options, ui):
             page_info_str = f"{page_num+1}/{total_p}"
             
             if crop_regions:
-                header = ["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(len(crop_regions))]
+                header = ["ページ番号"]
+                if all_regions_data and merged_data:
+                    # 分割されたセル数に合わせてヘッダーを動的に生成する
+                    for i, region_data in enumerate(all_regions_data):
+                        num_cols = len(region_data[0]) if region_data and len(region_data) > 0 else 1
+                        if num_cols == 1:
+                            header.append(f"抽出範囲{i+1}")
+                        else:
+                            for j in range(num_cols):
+                                header.append(f"抽出範囲{i+1}-{j+1}")
+                else:
+                    header = ["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(len(crop_regions))]
+                
                 final_data.append(header)
                 for row in merged_data: final_data.append([page_info_str] + row)
             else:

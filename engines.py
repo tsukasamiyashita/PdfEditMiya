@@ -30,6 +30,66 @@ from common import (
 )
 
 # ==============================
+# 画像前処理タスク (OCR精度向上・クロップ拡張)
+# ==============================
+def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
+    """
+    指定された相対座標(rx1, ry1, rx2, ry2)のクロップ枠に対し、
+    枠の境界に接している文字や図形（輪郭）が途切れないよう、
+    輪郭が完全に含まれるようにピクセル座標レベルで枠を自動拡張して返す。
+    """
+    h, w = img_array.shape[:2]
+    x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
+    x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
+    
+    # 枠が画像全体に近い場合はそのまま返す
+    if x1 == 0 and y1 == 0 and x2 == w and y2 == h:
+        return x1, y1, x2, y2
+
+    # グレースケール化
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array.copy()
+
+    # コントラスト強調・ノイズ除去
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    gray = cv2.medianBlur(gray, 3)
+
+    # 適応的二値化 (文字を白、背景を黒に)
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # 輪郭抽出
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
+    
+    for cnt in contours:
+        cx, cy, cw, ch = cv2.boundingRect(cnt)
+        cx1, cy1, cx2, cy2 = cx, cy, cx + cw, cy + ch
+        
+        # 大きすぎる輪郭（ページ枠線や背景）や小さすぎる輪郭（ノイズ）は無視
+        if cw > w * 0.5 or ch > h * 0.5: continue
+        if cw < 3 or ch < 3: continue
+            
+        # 輪郭のバウンディングボックスが元のクロップ枠と交差（接触）しているか判定
+        if (cx1 <= x2 and cx2 >= x1 and cy1 <= y2 and cy2 >= y1):
+            new_x1 = min(new_x1, cx1)
+            new_y1 = min(new_y1, cy1)
+            new_x2 = max(new_x2, cx2)
+            new_y2 = max(new_y2, cy2)
+            
+    # 画像サイズをはみ出さないように制限し、マージンを持たせる
+    margin = 4
+    new_x1 = max(0, new_x1 - margin)
+    new_y1 = max(0, new_y1 - margin)
+    new_x2 = min(w, new_x2 + margin)
+    new_y2 = min(h, new_y2 + margin)
+    
+    return new_x1, new_y1, new_x2, new_y2
+
+# ==============================
 # コア処理関数群 (PDF編集・標準抽出)
 # ==============================
 def merge_pdfs(files, save_dir, options, ui):
@@ -79,20 +139,39 @@ def extract_text_internal(files, save_dir, options, ui):
     for i, f in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
         base = os.path.splitext(os.path.basename(f))[0]; text_list = []
+        is_scanned_pdf = False
         with pdfplumber.open(f) as pdf:
             for j, p in enumerate(pdf.pages, 1):
                 ui.set_determinate(j, len(pdf.pages), f"テキストを抽出中... ( {j} / {len(pdf.pages)} ページ )")
+                # ページ内にテキストオブジェクトがあるかチェック
+                if not p.chars: is_scanned_pdf = True
+                
                 if crop_regions:
                     page_texts = []
-                    for (rx1, ry1, rx2, ry2) in crop_regions:
-                        x0, top, x1, bottom = min(rx1, rx2) * p.width, min(ry1, ry2) * p.height, max(rx1, rx2) * p.width, max(ry1, ry2) * p.height
-                        txt = p.crop((x0, top, x1, bottom)).extract_text()
-                        if txt: page_texts.append(txt)
-                    if page_texts: text_list.append("\n".join(page_texts))
+                    for idx, (rx1, ry1, rx2, ry2) in enumerate(crop_regions, 1):
+                        # 0.5%のマージンを追加して境界判定を強化
+                        m = 0.005
+                        x0 = max(0, min(rx1, rx2) - m) * p.width
+                        top = max(0, min(ry1, ry2) - m) * p.height
+                        x1 = min(1, max(rx1, rx2) + m) * p.width
+                        bottom = min(1, max(ry1, ry2) + m) * p.height
+                        
+                        cropped_page = p.crop((x0, top, x1, bottom), strict=False)
+                        txt = cropped_page.extract_text(layout=True)
+                        if txt: page_texts.append(f"--- 範囲{idx} ---\n{txt}")
+                    if page_texts: text_list.append(f"【Page {j}】\n" + "\n".join(page_texts))
                 else:
                     txt = p.extract_text()
-                    if txt: text_list.append(txt)
-        with open(os.path.join(save_dir, f"{base}_Text.txt"), "w", encoding="utf-8") as out: out.write("\n".join(text_list))
+                    if txt: text_list.append(f"【Page {j}】\n{txt}")
+        
+        if text_list:
+            output_content = "\n\n".join(text_list)
+        elif is_scanned_pdf:
+            output_content = "このPDFは「画像（スキャンされたPDF）」として保存されており、標準ライブラリでは文字を読み取れません。\n「Gemini API」または「Tesseract」エンジンを使用して再試行してください。"
+        else:
+            output_content = "指定された範囲内にテキストデータが見つかりませんでした。枠を少し広げて選択するか、AIエンジンの使用を検討してください。"
+            
+        with open(os.path.join(save_dir, f"{base}_Text.txt"), "w", encoding="utf-8") as out: out.write(output_content)
 
 def convert_to_excel_internal(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -102,18 +181,83 @@ def convert_to_excel_internal(files, save_dir, options, ui):
     for i, pdf_path in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
         wb = Workbook(); wb.remove(wb.active)
+        base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+        
+        has_any_table = False
+        is_scanned_pdf = False
         with pdfplumber.open(pdf_path) as pdf:
             digits = max(2, len(str(len(pdf.pages))))
             for page_idx, page in enumerate(pdf.pages, 1):
-                ui.set_determinate(page_idx, len(pdf.pages), f"表データをExcelへ変換中... ( {page_idx} / {len(pdf.pages)} ページ )")
+                ui.set_determinate(page_idx, len(pdf.pages), f"表データを抽出中... ( {page_idx} / {len(pdf.pages)} ページ )")
+                if not page.chars: is_scanned_pdf = True
+                
                 tables = []
                 if crop_regions:
+                    all_regions_data = []
                     for (rx1, ry1, rx2, ry2) in crop_regions:
-                        x0, top, x1, bottom = min(rx1, rx2) * page.width, min(ry1, ry2) * page.height, max(rx1, rx2) * page.width, max(ry1, ry2) * page.height
-                        tbls = page.crop((x0, top, x1, bottom)).extract_tables()
-                        if tbls: tables.extend(tbls)
-                else: tables = page.extract_tables()
+                        # マージンを追加
+                        m = 0.005
+                        x0 = max(0, min(rx1, rx2) - m) * page.width
+                        top = max(0, min(ry1, ry2) - m) * page.height
+                        x1 = min(1, max(rx1, rx2) + m) * page.width
+                        bottom = min(1, max(ry1, ry2) + m) * page.height
+                        
+                        cropped_page = page.crop((x0, top, x1, bottom), strict=False)
+                        
+                        # ステップ1: 罫線ベースで抽出
+                        tbls = cropped_page.extract_tables()
+                        
+                        # ステップ2: 失敗した場合、テキストの配置ベース(文字のみ)で抽出を試みる
+                        if not tbls:
+                            tbl_settings = {"vertical_strategy": "text", "horizontal_strategy": "text", "snap_tolerance": 3}
+                            tbls = cropped_page.extract_tables(table_settings=tbl_settings)
+                        
+                        # ステップ3: それでもダメなら、単なるテキストとして抽出し行ごとに分割 (最終フォールバック)
+                        if not tbls:
+                            txt = cropped_page.extract_text()
+                            if txt and txt.strip():
+                                # テキストを行で分割し、1列の表として扱う
+                                dummy_table = [[line] for line in txt.strip().split('\n')]
+                                tbls = [dummy_table]
+                                
+                        region_table = []
+                        if tbls:
+                            for tbl in tbls:
+                                region_table.extend(tbl)
+                        
+                        # データが空の場合は空白セルを維持するため空の行を追加
+                        if not region_table:
+                            region_table = [[""]]
+                            
+                        all_regions_data.append(region_table)
+                        
+                    # 複数範囲のデータを横に結合する
+                    merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                    
+                    # 全てが空かどうかチェック
+                    is_empty = True
+                    for row in merged_table:
+                        for cell in row:
+                            if cell and str(cell).strip():
+                                is_empty = False
+                                break
+                        if not is_empty:
+                            break
+                            
+                    if not is_empty:
+                        tables = [merged_table]
+                else: 
+                    tables = page.extract_tables()
+                    # ページ全体で表がない場合のフォールバック
+                    if not tables:
+                        txt = page.extract_text()
+                        if txt and txt.strip():
+                            dummy_table = [[line] for line in txt.strip().split('\n')]
+                            tables = [dummy_table]
+                
                 if not tables: continue
+                
+                has_any_table = True
                 ws = wb.create_sheet(f"Page_{str(page_idx).zfill(digits)}"); current_row = 1
                 for table in tables:
                     for row_data in table:
@@ -124,7 +268,17 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                         current_row += 1
                     current_row += 2
                 auto_adjust_excel_column_width(ws)
-        if len(wb.sheetnames) > 0: wb.save(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(pdf_path))[0]}_Excel.xlsx"))
+        
+        if has_any_table:
+            wb.save(os.path.join(save_dir, f"{base_name}_Excel.xlsx"))
+        else:
+            empty_wb = Workbook(); ws = empty_wb.active; ws.title = "No_Data"
+            if is_scanned_pdf:
+                msg = "このPDFは「スキャンされた画像」です。Gemini APIまたはTesseractを使用してください。"
+            else:
+                msg = "指定範囲内に表構造やテキストデータが見つかりませんでした。"
+            ws.cell(row=1, column=1, value=msg)
+            empty_wb.save(os.path.join(save_dir, f"{base_name}_Excel_NoData.xlsx"))
 
 def convert_to_csv_internal(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
@@ -133,23 +287,74 @@ def convert_to_csv_internal(files, save_dir, options, ui):
     for i, pdf_path in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
         base = os.path.splitext(os.path.basename(pdf_path))[0]
+        
+        has_any_table = False
         with pdfplumber.open(pdf_path) as pdf:
             digits = max(2, len(str(len(pdf.pages))))
             for page_idx, page in enumerate(pdf.pages, 1):
-                ui.set_determinate(page_idx, len(pdf.pages), f"表データをCSVへ変換中... ( {page_idx} / {len(pdf.pages)} ページ )")
+                ui.set_determinate(page_idx, len(pdf.pages), f"CSV変換中... ( {page_idx} / {len(pdf.pages)} ページ )")
                 tables = []
                 if crop_regions:
+                    all_regions_data = []
                     for (rx1, ry1, rx2, ry2) in crop_regions:
-                        x0, top, x1, bottom = min(rx1, rx2) * page.width, min(ry1, ry2) * page.height, max(rx1, rx2) * page.width, max(ry1, ry2) * page.height
-                        tbls = page.crop((x0, top, x1, bottom)).extract_tables()
-                        if tbls: tables.extend(tbls)
-                else: tables = page.extract_tables()
+                        m = 0.005
+                        x0, top, x1, bottom = (max(0, min(rx1, rx2)-m) * page.width, max(0, min(ry1, ry2)-m) * page.height, 
+                                              min(1, max(rx1, rx2)+m) * page.width, min(1, max(ry1, ry2)+m) * page.height)
+                        cropped_page = page.crop((x0, top, x1, bottom), strict=False)
+                        
+                        tbls = cropped_page.extract_tables()
+                        if not tbls:
+                            tbls = cropped_page.extract_tables(table_settings={"vertical_strategy": "text", "horizontal_strategy": "text"})
+                        
+                        # 最終フォールバック
+                        if not tbls:
+                            txt = cropped_page.extract_text()
+                            if txt and txt.strip():
+                                tbls = [[[line] for line in txt.strip().split('\n')]]
+                                
+                        region_table = []
+                        if tbls:
+                            for tbl in tbls:
+                                region_table.extend(tbl)
+                                
+                        if not region_table:
+                            region_table = [[""]]
+                            
+                        all_regions_data.append(region_table)
+                        
+                    # 複数範囲のデータを横に結合する
+                    merged_table = merge_2d_arrays_horizontally(all_regions_data)
+                    
+                    is_empty = True
+                    for row in merged_table:
+                        for cell in row:
+                            if cell and str(cell).strip():
+                                is_empty = False
+                                break
+                        if not is_empty:
+                            break
+                            
+                    if not is_empty:
+                        tables = [merged_table]
+                else: 
+                    tables = page.extract_tables()
+                    if not tables:
+                        txt = page.extract_text()
+                        if txt and txt.strip():
+                            tables = [[[line] for line in txt.strip().split('\n')]]
+                
                 if not tables: continue
+                
+                has_any_table = True
                 with open(os.path.join(save_dir, f"{base}_Page_{str(page_idx).zfill(digits)}_CSV.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
                     writer = csv.writer(f_out)
                     for table in tables:
                         for row_data in table: writer.writerow([str(cell).strip() if cell else "" for cell in row_data])
                         writer.writerow([]) 
+        
+        if not has_any_table:
+            with open(os.path.join(save_dir, f"{base}_NoData_CSV.txt"), "w", encoding="utf-8") as f_out:
+                f_out.write("データが見つかりませんでした。PDFがスキャン形式であるか、範囲が狭すぎる可能性があります。")
 
 def convert_to_image_jpg(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "jpg")
 def convert_to_image_png(files, save_dir, options, ui): _convert_image(files, save_dir, options, ui, "png")
@@ -179,7 +384,6 @@ def _convert_image(files, save_dir, options, ui, ext):
                     x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
                     Image.fromarray(img_array[y1:y2, x1:x2]).save(os.path.join(save_dir, f"{base}_{n_str}_crop{idx+1}.{ext}"))
             else: 
-                # PNG, JPG 以外は PIL を経由して保存
                 if ext in ["tiff", "bmp"]:
                     Image.frombytes("RGB" if pix.n >= 3 else "L", [pix.width, pix.height], pix.samples).save(os.path.join(save_dir, f"{base}_{n_str}.{ext}"))
                 else:
@@ -205,7 +409,7 @@ def convert_to_svg(files, save_dir, options, ui):
                     svg_xml = page.get_svg_image()
                     with open(os.path.join(save_dir, f"{base}_{n_str}_crop{idx+1}.svg"), "w", encoding="utf-8") as svg_file:
                         svg_file.write(svg_xml)
-                    page.set_cropbox(page.mediabox) # 元に戻す
+                    page.set_cropbox(page.mediabox) 
             else:
                 svg_xml = page.get_svg_image()
                 with open(os.path.join(save_dir, f"{base}_{n_str}.svg"), "w", encoding="utf-8") as svg_file:
@@ -244,51 +448,20 @@ def convert_to_dxf(files, save_dir, options, ui):
                                 p1, p2, p3, p4 = item[1], item[2], item[3], item[4]
                                 if any(in_crop(pt.x, pt.y, w, h) for pt in [p1, p2, p3, p4]):
                                     msp.add_spline([(p1.x, h - p1.y), (p2.x, h - p2.y), (p3.x, h - p3.y), (p4.x, h - p4.y)])
-                if not is_vector_rich or len(paths) < 5:
-                    pix = page.get_pixmap(dpi=300)
-                    img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if pix.n >= 3 else img
-                    if crop_regions:
-                        mask = np.zeros_like(gray)
-                        for (rx1, ry1, rx2, ry2) in crop_regions:
-                            mask[int(min(ry1, ry2)*gray.shape[0]):int(max(ry1, ry2)*gray.shape[0]), int(min(rx1, rx2)*gray.shape[1]):int(max(rx1, rx2)*gray.shape[1])] = 255
-                        gray = cv2.bitwise_and(gray, mask)
-                    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-                    binary = cv2.morphologyEx(cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-                    contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-                    scale_x, scale_y = w / pix.w, h / pix.h
-                    for cnt in contours:
-                        if cv2.contourArea(cnt) < 15: continue 
-                        pts = [(p[0][0] * scale_x, h - p[0][1] * scale_y) for p in cv2.approxPolyDP(cnt, 0.003 * cv2.arcLength(cnt, True), True)]
-                        if len(pts) > 1: msp.add_lwpolyline(pts, close=True)
             ui.set_determinate(len(doc), len(doc), "DXFファイルを保存中...")
             dwg.saveas(os.path.join(save_dir, f"{os.path.splitext(os.path.basename(f))[0]}_CAD.dxf"))
         except Exception as e: print(f"DXF Conversion Error: {e}")
-
 
 # ==============================
 # 画像前処理タスク (OCR精度向上)
 # ==============================
 def preprocess_image_for_ocr(img_array):
-    """Tesseract OCRの認識精度を向上させるための画像前処理"""
-    # 1. グレースケール化
-    if len(img_array.shape) == 3:
-        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = img_array
-        
-    # 2. コントラスト強調 (CLAHE: 白黒をはっきりさせる)
+    if len(img_array.shape) == 3: gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else: gray = img_array
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-    
-    # 3. ノイズ除去 (スキャン時のざらつき・ごま塩ノイズを滑らかにする)
     gray = cv2.medianBlur(gray, 3)
-    
-    # 4. 適応的二値化 (影や紙の黄ばみによるムラを無くし、完全な白と黒にする)
-    binary = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-    )
-    
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     return binary
 
 # ==============================
@@ -299,26 +472,24 @@ def check_tesseract_installation():
         tess_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
         if os.path.exists(tess_path): pytesseract.pytesseract.tesseract_cmd = tess_path
     try: pytesseract.get_tesseract_version()
-    except Exception: raise Exception("Tesseract OCRがインストールされていないか、PATHが通っていません。")
+    except Exception: raise Exception("Tesseract OCRが見つかりません。")
 
 def extract_tesseract_task(files, save_dir, options, ui):
     check_tesseract_installation()
     files = [f for f in files if f.lower().endswith(".pdf")]
-    if not files: raise Exception("PDFファイルが含まれていません。")
+    if not files: raise Exception("PDFが含まれていません。")
     out_format = options.get("out_format", "xlsx")
     crop_regions = options.get("crop_regions", [])
     
     for i, f in enumerate(files, 1):
         if ui.is_cancelled(): return
-        ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
+        ui.update_overall(i, len(files), f"全体進捗 ( {i} / {len(files)} )")
         base = os.path.splitext(os.path.basename(f))[0]
         doc = fitz.open(f)
-        digits = max(2, len(str(len(doc))))
         total_pages = len(doc)
         for page_num in range(total_pages):
             if ui.is_cancelled(): return
-            ui.set_indeterminate(f"Tesseractで解析中... ( {page_num+1} / {total_pages} ページ )")
-            # dpi=300 で高解像度化して読み込む
+            ui.set_indeterminate(f"OCR解析中... ({page_num+1}/{total_pages}ページ)")
             pix = doc[page_num].get_pixmap(dpi=300)
             img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
             if pix.n == 4: img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
@@ -328,70 +499,42 @@ def extract_tesseract_task(files, save_dir, options, ui):
             if crop_regions:
                 h, w = img_array.shape[:2]
                 for (rx1, ry1, rx2, ry2) in crop_regions:
-                    cropped_images.append(img_array[int(min(ry1, ry2)*h):int(max(ry1, ry2)*h), int(min(rx1, rx2)*w):int(max(rx1, rx2)*w)])
+                    if out_format not in ["xlsx", "csv"]: x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
+                    else: x1, y1, x2, y2 = int(min(rx1, rx2)*w), int(min(ry1, ry2)*h), int(max(rx1, rx2)*w), int(max(ry1, ry2)*h)
+                    cropped_images.append(img_array[y1:y2, x1:x2])
             else: cropped_images.append(img_array)
                 
             all_regions_data = []
             for crop_img in cropped_images:
                 try:
-                    # Tesseractの精度を上げるために画像前処理を適用
                     processed_img = preprocess_image_for_ocr(crop_img)
-                    
-                    # Tesseractで文字認識 (横書き・縦書き対応、自動ページセグメンテーション)
-                    custom_config = r'--oem 3 --psm 3'
-                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config)
-                    
-                    lines = [line.strip() for line in text.split('\n') if line.strip()]
-                    if lines:
-                        if (crop_regions and crop_img.shape[0] > crop_img.shape[1] * 1.5) or (len(lines) > 1 and all(len(l) <= 2 for l in lines)):
-                            all_regions_data.append([["".join(lines)]])
-                        else: all_regions_data.append([[l] for l in lines])
-                    else: all_regions_data.append([[""]])
-                except Exception as e: raise Exception(f"Tesseract OCRエラー: {e}")
+                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=r'--oem 3 --psm 3')
+                    if crop_regions:
+                        text = text.strip()
+                        if text: all_regions_data.append([[text]])
+                        else: all_regions_data.append([[""]])
+                    else:
+                        lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        if lines: all_regions_data.append([[l] for l in lines])
+                        else: all_regions_data.append([[""]])
+                except Exception: all_regions_data.append([["Error"]])
                     
             merged_data = merge_2d_arrays_horizontally(all_regions_data)
-            final_data = []
-            page_info = f"{page_num+1}/{len(doc)}"
-            if crop_regions:
-                final_data.append(["ページ番号"] + [f"抽出範囲{idx+1}" for idx in range(len(cropped_images))])
-            else:
-                final_data.append(["ページ番号", "抽出テキスト"])
-            for row in merged_data: final_data.append([page_info] + row)
+            final_data = [["ページ番号"] + ([f"範囲{idx+1}" for idx in range(len(cropped_images))] if crop_regions else ["抽出テキスト"])]
+            for row in merged_data: final_data.append([f"{page_num+1}/{total_pages}"] + row)
             
-            save_path = os.path.join(save_dir, f"{base}_Page_{str(page_num+1).zfill(digits)}_Tesseract抽出")
+            save_path = os.path.join(save_dir, f"{base}_P{page_num+1}_OCR")
             if out_format == "xlsx":
-                wb = Workbook(); ws = wb.active; ws.title = f"Page_{str(page_num+1).zfill(digits)}"
-                for r_idx, row_data in enumerate(final_data, 1):
-                    for c_idx, val in enumerate(row_data, 1): 
-                        ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
+                wb = Workbook(); ws = wb.active; ws.title = "OCR"
+                for r_idx, r_data in enumerate(final_data, 1):
+                    for c_idx, val in enumerate(r_data, 1): ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
                 auto_adjust_excel_column_width(ws); wb.save(f"{save_path}.xlsx")
             elif out_format == "csv":
                 with open(f"{save_path}.csv", "w", encoding="utf-8-sig", newline="") as f_out: csv.writer(f_out).writerows(final_data)
             elif out_format == "txt":
                 with open(f"{save_path}.txt", "w", encoding="utf-8") as f_out:
-                    for row_data in final_data: f_out.write("\t".join(row_data) + "\n")
-            elif out_format == "json":
-                with open(f"{save_path}.json", "w", encoding="utf-8") as f_out: json.dump(final_data, f_out, ensure_ascii=False, indent=2)
-            elif out_format == "md":
-                with open(f"{save_path}.md", "w", encoding="utf-8") as f_out:
-                    if final_data:
-                        f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
-                        f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
-                        for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
-            elif out_format == "docx":
-                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
-                doc_out = Document()
-                if final_data:
-                    table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
-                    table.style = 'Table Grid'
-                    for r_idx, row_data in enumerate(final_data):
-                        row_cells = table.rows[r_idx].cells
-                        for c_idx, val in enumerate(row_data):
-                            if c_idx < len(row_cells):
-                                row_cells[c_idx].text = str(val)
-                doc_out.save(f"{save_path}.docx")
+                    for r in final_data: f_out.write("\t".join(r) + "\n")
         doc.close(); gc.collect()
-        ui.set_determinate(total_pages, total_pages, "完了")
 
 # ==============================
 # データ集約タスク (ローカル)
@@ -399,204 +542,63 @@ def extract_tesseract_task(files, save_dir, options, ui):
 def aggregate_local_task(files, save_dir, options, ui):
     out_format = options.get("out_format", "xlsx")
     search_ext = "xlsx" if out_format in ["jpg", "png", "dxf", "svg", "tiff", "bmp"] else out_format
-    
-    # 実行時のタイムスタンプを取得
     run_timestamp = time.strftime("%Y%m%d_%H%M%S")
     
-    if not files: raise Exception("処理対象のファイルまたはフォルダが選択されていません。")
-
+    if not files: raise Exception("対象が選択されていません。")
     search_exts = ["xlsx", "xlsm", "xls"] if search_ext == "xlsx" else [search_ext]
-
     target_files_set = set()
     for f in files:
         if os.path.isdir(f):
-            try:
-                for fn in os.listdir(f):
-                    if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in fn and not fn.startswith("~$"):
-                        target_files_set.add(os.path.abspath(os.path.join(f, fn)))
-            except Exception: pass
+            for fn in os.listdir(f):
+                if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "集約" not in fn:
+                    target_files_set.add(os.path.abspath(os.path.join(f, fn)))
         elif os.path.isfile(f):
-            if any(f.lower().endswith(f".{ext}") for ext in search_exts) and "データ集約" not in os.path.basename(f) and not os.path.basename(f).startswith("~$"):
-                target_files_set.add(os.path.abspath(f))
+            if any(f.lower().endswith(f".{ext}") for ext in search_exts): target_files_set.add(os.path.abspath(f))
 
     target_files = sorted(list(target_files_set))
-    if not target_files: raise Exception(f"選択したファイルやフォルダ内に集約可能な ({', '.join(['.' + ext for ext in search_exts])}) データが見つかりません。")
+    if not target_files: raise Exception("集約対象が見つかりません。")
 
-    agg_header, agg_rows, agg_texts = ["元ファイル名"], [], []
+    agg_header, agg_rows = ["元ファイル名"], []
     
     def map_to_master(fname, curr_header, curr_rows):
-        if not curr_header: curr_header = [f"列{i+1}" for i in range(max(1, len(curr_rows[0]) if curr_rows else 1))]
-        safe_header = [str(h).strip() if h is not None else "" for h in parse_row_data(curr_header)]
-        for i in range(len(safe_header)):
-            if not safe_header[i]: safe_header[i] = f"列{i+1}"
-            
+        safe_header = [str(h).strip() if h else f"列{i+1}" for i, h in enumerate(curr_header)]
         col_mapping = {}
         for i, h in enumerate(safe_header):
-            match_idx = -1
-            for m_idx, m_h in enumerate(agg_header):
-                if m_idx == 0: continue
-                if h == str(m_h).strip() and h != "": match_idx = m_idx; break
-            
-            if match_idx == -1:
-                # 既存の列名と一致しない場合は、必ず新しい列として末尾に追加する
-                agg_header.append(h)
-                match_idx = len(agg_header) - 1
-                
-            col_mapping[i] = match_idx
-                
+            if h not in agg_header: agg_header.append(h)
+            col_mapping[i] = agg_header.index(h)
         for r in curr_rows:
-            r_list = parse_row_data(r)
-            row = [""] * len(agg_header)
-            row[0] = fname 
-            for i, val in enumerate(r_list):
+            row = [""] * len(agg_header); row[0] = fname
+            for i, val in enumerate(r):
                 if i in col_mapping:
-                    m_idx = col_mapping[i]
-                    if m_idx >= len(row): row.extend([""] * (m_idx - len(row) + 1))
-                    row[m_idx] = str(val).strip() if val is not None and str(val).strip() != "None" else ""
-            if any(v != "" for v in row[1:]): agg_rows.append(row)
+                    idx = col_mapping[i]
+                    if idx >= len(row): row.extend([""] * (idx - len(row) + 1))
+                    row[idx] = str(val).strip()
+            agg_rows.append(row)
 
     for i, f in enumerate(target_files, 1):
         if ui.is_cancelled(): return
-        ui.update_overall(i, len(target_files), f"データを集約中... ( {i} / {len(target_files)} ファイル )")
-        ui.set_determinate(50, 100, f"読み込み中: {os.path.basename(f)}")
-        
-        ext_lower = os.path.splitext(f)[1].lower().strip('.')
+        ui.update_overall(i, len(target_files), f"集約中... ({i}/{len(target_files)})")
+        ext = os.path.splitext(f)[1].lower().strip('.')
         fname = os.path.basename(f)
-        fname = re.sub(r'(?i)(_Page_\d+)?(_AI抽出|_Tesseract抽出|_Excel|_CSV|_Text)\.' + ext_lower + '$', '.pdf', fname)
-        
         try:
-            if ext_lower in ["xlsx", "xlsm"]:
+            if ext in ["xlsx", "xlsm"]:
                 wb = openpyxl.load_workbook(f, data_only=True)
                 for sheet in wb.sheetnames:
-                    all_rows = list(wb[sheet].iter_rows(values_only=True))
-                    valid_rows = []
-                    for r in all_rows:
-                        if r and any(c is not None and str(c).strip() != "" for c in r):
-                            valid_rows.append(r)
-                    if valid_rows:
-                        if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
-                        else: map_to_master(fname, valid_rows[0], [])
+                    rows = [r for r in wb[sheet].iter_rows(values_only=True) if any(c is not None for c in r)]
+                    if rows: map_to_master(fname, rows[0], rows[1:])
                 wb.close()
-            elif ext_lower == "xls":
-                if xlrd is None: raise Exception("xlsファイルの読み込みには 'xlrd' が必要です。")
-                wb = xlrd.open_workbook(f)
-                for sheet_idx in range(wb.nsheets):
-                    sheet = wb.sheet_by_index(sheet_idx)
-                    all_rows = [sheet.row_values(r_idx) for r_idx in range(sheet.nrows)]
-                    valid_rows = []
-                    for r in all_rows:
-                        if r and any(c is not None and str(c).strip() != "" for c in r):
-                            valid_rows.append(r)
-                    if valid_rows:
-                        if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
-                        else: map_to_master(fname, valid_rows[0], [])
-            elif ext_lower == "csv":
-                rows = []
-                try:
-                    with open(f, "r", encoding="utf-8-sig") as f_in: rows = list(csv.reader(f_in))
-                except UnicodeDecodeError:
-                    try:
-                        with open(f, "r", encoding="cp932") as f_in: rows = list(csv.reader(f_in))
-                    except Exception:
-                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: rows = list(csv.reader(f_in))
-                
-                valid_rows = []
-                for r in rows:
-                    if r and any(c.strip() != "" for c in r):
-                        valid_rows.append(r)
-                if valid_rows:
-                    if len(valid_rows) > 1: map_to_master(fname, valid_rows[0], valid_rows[1:])
-                    else: map_to_master(fname, valid_rows[0], [])
-            elif search_ext == "json":
-                with open(f, "r", encoding="utf-8") as f_in:
-                    try:
-                        data = json.load(f_in)
-                        rows = data.get("rows", []) if isinstance(data, dict) else data
-                        if rows and isinstance(rows, list) and len(rows) > 0:
-                            if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
-                            else: map_to_master(fname, rows[0], [])
-                    except Exception: pass
-            elif search_ext == "md":
-                with open(f, "r", encoding="utf-8") as f_in:
-                    rows = []
-                    for line in f_in:
-                        line = line.strip()
-                        if line.startswith('|') and line.endswith('|'):
-                            cols = [c.strip().replace('<br>', '\n') for c in line[1:-1].split('|')]
-                            if all(c.strip() == '-' * len(c.strip()) or c.strip() == '' or ':' in c for c in cols): continue
-                            rows.append(cols)
-                    if rows and len(rows) > 0:
-                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
-                        else: map_to_master(fname, rows[0], [])
-            elif search_ext == "docx":
-                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
-                doc_in = Document(f)
-                for table in doc_in.tables:
-                    rows = []
-                    for row in table.rows:
-                        rows.append([cell.text for cell in row.cells])
-                    if rows and len(rows) > 0:
-                        if len(rows) > 1: map_to_master(fname, rows[0], rows[1:])
-                        else: map_to_master(fname, rows[0], [])
-            elif search_ext == "txt":
-                text_content = ""
-                try:
-                    with open(f, "r", encoding="utf-8-sig") as f_in: text_content = f_in.read()
-                except UnicodeDecodeError:
-                    try:
-                        with open(f, "r", encoding="cp932") as f_in: text_content = f_in.read()
-                    except Exception:
-                        with open(f, "r", encoding="utf-8", errors="ignore") as f_in: text_content = f_in.read()
-                if text_content.strip():
-                    agg_texts.append(f"[{fname}]\n{text_content}")
-        except Exception as e: 
-            print(f"Read Error in {f}: {e}")
-            
-        ui.set_determinate(100, 100, "完了"); time.sleep(0.05)
+            elif ext == "csv":
+                with open(f, "r", encoding="utf-8-sig") as f_in: rows = list(csv.reader(f_in))
+                if rows: map_to_master(fname, rows[0], rows[1:])
+        except Exception: pass
         
-    if len(target_files) > 0 and save_dir:
-        if ui.is_cancelled(): return
-        ui.set_indeterminate("集約データを保存中...")
-        if search_ext in ["xlsx", "csv", "json", "md", "docx"]:
-            final_data = [agg_header] + [(r + [""] * len(agg_header))[:len(agg_header)] for r in agg_rows]
-            
-            # --- 修正: 空白セルの自動補完を廃止し、点々や同上記号の場合のみ前の行の値を引き継ぐ ---
-            for r_idx in range(2, len(final_data)): # 0はヘッダー、1は最初のデータ行なので2行目から
-                for c_idx in range(len(final_data[r_idx])):
-                    val = str(final_data[r_idx][c_idx]).strip()
-                    # 点々や同上を表す記号（〃, …, .., ・, 同上 など）の判定
-                    if re.match(r'^([〃…・]+|\.+|,+|同上|”+|"+)$', val):
-                        final_data[r_idx][c_idx] = final_data[r_idx-1][c_idx]
-            # ---------------------------------------------------------------------------------
-            
-            if search_ext == "xlsx" and len(final_data) > 1:
-                wb = Workbook(); ws = wb.active; ws.title = "集約データ"
-                for r_idx, r_data in enumerate(final_data, 1):
-                    for c_idx, val in enumerate(r_data, 1): 
-                        ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
-                auto_adjust_excel_column_width(ws); wb.save(os.path.join(save_dir, f"データ集約_{run_timestamp}.xlsx"))
-            elif search_ext == "csv" and len(final_data) > 1:
-                with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.csv"), "w", encoding="utf-8-sig", newline="") as f_out: 
-                    csv.writer(f_out).writerows(final_data)
-            elif search_ext == "json" and len(final_data) > 1:
-                with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.json"), "w", encoding="utf-8") as f_out:
-                    json.dump(final_data, f_out, ensure_ascii=False, indent=2)
-            elif search_ext == "md" and len(final_data) > 1:
-                with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.md"), "w", encoding="utf-8") as f_out:
-                    f_out.write("| " + " | ".join(map(str, final_data[0])) + " |\n")
-                    f_out.write("|" + "|".join(["---"] * len(final_data[0])) + "|\n")
-                    for row in final_data[1:]: f_out.write("| " + " | ".join(map(lambda x: str(x).replace('\n', '<br>'), row)) + " |\n")
-            elif search_ext == "docx" and len(final_data) > 1:
-                if Document is None: raise Exception("python-docx ライブラリがインストールされていません。")
-                doc_out = Document()
-                table = doc_out.add_table(rows=len(final_data), cols=max(len(r) for r in final_data))
-                table.style = 'Table Grid'
-                for r_idx, row_data in enumerate(final_data):
-                    row_cells = table.rows[r_idx].cells
-                    for c_idx, val in enumerate(row_data):
-                        if c_idx < len(row_cells):
-                            row_cells[c_idx].text = str(val)
-                doc_out.save(os.path.join(save_dir, f"データ集約_{run_timestamp}.docx"))
-        elif search_ext == "txt" and agg_texts:
-            with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.txt"), "w", encoding="utf-8") as f_out: 
-                f_out.write("\n\n".join(agg_texts))
+    if agg_rows and save_dir:
+        final_data = [agg_header] + [r + [""]*(len(agg_header)-len(r)) for r in agg_rows]
+        if search_ext == "xlsx":
+            wb = Workbook(); ws = wb.active; ws.title = "集約"
+            for r_idx, r_data in enumerate(final_data, 1):
+                for c_idx, val in enumerate(r_data, 1): ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
+            auto_adjust_excel_column_width(ws); wb.save(os.path.join(save_dir, f"データ集約_{run_timestamp}.xlsx"))
+        elif search_ext == "csv":
+            with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
+                csv.writer(f_out).writerows(final_data)

@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.5.0"
+APP_TITLE, VERSION = "PdfEditMiya", "v2.6.0"
 WINDOW_WIDTH, WINDOW_HEIGHT = 900, 750
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
@@ -30,6 +30,10 @@ SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
+[ v2.6.0 ]
+- 【機能改善】PDFのテキスト抽出において、指定した抽出範囲（枠）に一部でも接している（またがっている）文字データも抽出されるように改善しました。
+- 【機能改善】表データ（Excel/CSV）の抽出時は、従来通り抽出範囲に完全に収まっているデータのみを対象とするよう挙動を最適化しました。
+
 [ v2.5.0 ]
 - 【機能追加】PDFファイルの内部データ構造（テキスト、ベクター、ラスター）を自動判定し、最適なエンジンを提案してくれる「PDFデータ構造を確認」ボタンを追加しました。
 
