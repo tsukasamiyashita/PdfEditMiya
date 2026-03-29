@@ -400,6 +400,15 @@ def _on_mousewheel(event):
 # アプリケーション初期化とUI構築
 # ==============================
 root = tk.Tk(); root.title(f"{APP_TITLE} {VERSION}")
+icon_path = resource_path("icon.ico")
+if os.path.exists(icon_path):
+    try:
+        root.iconphoto(True, tk.PhotoImage(file=icon_path))
+    except Exception as e:
+        try:
+            root.iconbitmap(icon_path)
+        except Exception as e2:
+            print(f"Failed to set icon: {e}, {e2}")
 root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
 root.minsize(width=720, height=580) 
 root.configure(bg=BG_COLOR)
