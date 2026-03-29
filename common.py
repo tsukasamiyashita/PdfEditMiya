@@ -23,8 +23,14 @@ COLOR_DANGER, COLOR_DANGER_HOVER = "#DC3545", "#B02A37"
 COLOR_PURPLE, COLOR_PURPLE_HOVER = "#6F42C1", "#59339D"
 
 USER_HOME = os.path.expanduser("~")
-API_KEY_FILE = os.path.join(USER_HOME, ".pdfeditmiya_api_key.txt")
-SETTINGS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_settings.json") 
+APP_DIR = os.path.join(USER_HOME, "PdfEditMiya")
+
+# 保存用フォルダが存在しない場合は作成
+if not os.path.exists(APP_DIR):
+    os.makedirs(APP_DIR)
+
+API_KEY_FILE = os.path.join(APP_DIR, ".pdfeditmiya_api_key.txt")
+SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json") 
 
 # ==============================
 # ヘルプ・履歴テキスト
