@@ -223,8 +223,8 @@ def apply_text_inheritance(final_aggregated_data):
     if len(final_aggregated_data) <= 1: return
     def is_text_to_inherit(text):
         s = str(text).strip()
-        if not s or s in ["〃", "”", "\"", "''", "””", "''", "同上"]: return False
-        return bool(re.search(r'[a-zA-Zａ-ｚＡ-Ｚぁ-んァ-ン一-龥]', s))
+        if not s or s in ["〃", "”", "\"", "''", "””", "''", "同上", "...", "…"]: return False
+        return bool(re.search(r'[a-zA-Zａ-ｚＡ-Ｚぁ-んァ-ン一-龥0-9０-９]', s))
     header = final_aggregated_data[0]
     skip_cols = {idx for idx, h in enumerate(header) if "備考" in str(h)}
     for col_idx in range(1, len(header)):
@@ -232,8 +232,15 @@ def apply_text_inheritance(final_aggregated_data):
         last_text = ""
         for row_idx in range(1, len(final_aggregated_data)):
             cell_val = str(final_aggregated_data[row_idx][col_idx]).strip()
-            if cell_val in ["", "None", "〃", "”", "\"", "''", "””", "''", "同上"]:
+            
+            if cell_val == "None":
+                cell_val = ""
+                final_aggregated_data[row_idx][col_idx] = ""
+                
+            if cell_val in ["〃", "”", "\"", "''", "””", "''", "同上", "...", "…"]:
                 if last_text: final_aggregated_data[row_idx][col_idx] = last_text
+            elif cell_val == "":
+                pass
             else:
                 last_text = cell_val if is_text_to_inherit(cell_val) else ""
 

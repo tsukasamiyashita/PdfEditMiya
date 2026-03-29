@@ -92,6 +92,17 @@ def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
 # ==============================
 # コア処理関数群 (PDF編集・標準抽出)
 # ==============================
+def check_pdf_has_text(pdf_path):
+    """PDFにテキストデータ（フォント情報）が含まれているか確認する"""
+    try:
+        with fitz.open(pdf_path) as doc:
+            for page in doc:
+                if page.get_text().strip():
+                    return True
+    except Exception:
+        pass
+    return False
+
 def merge_pdfs(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
@@ -135,6 +146,11 @@ def rotate_pdfs(files, save_dir, options, ui):
 def extract_text_internal(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
+    
+    for f in files:
+        if not check_pdf_has_text(f):
+            raise Exception(f"ファイル「{os.path.basename(f)}」はスキャンされた画像（ラスターデータ）のため、標準ライブラリでは文字を抽出できません。\nエンジンを「Gemini API」または「Tesseract」に変更して実行してください。")
+            
     crop_regions = options.get("crop_regions", [])
     for i, f in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
@@ -174,6 +190,11 @@ def extract_text_internal(files, save_dir, options, ui):
 def convert_to_excel_internal(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
+    
+    for f in files:
+        if not check_pdf_has_text(f):
+            raise Exception(f"ファイル「{os.path.basename(f)}」はスキャンされた画像（ラスターデータ）のため、標準ライブラリではデータを抽出できません。\nエンジンを「Gemini API」または「Tesseract」に変更して実行してください。")
+            
     border_style = Side(border_style="thin", color="000000")
     crop_regions = options.get("crop_regions", [])
     for i, pdf_path in enumerate(files, 1):
@@ -280,6 +301,11 @@ def convert_to_excel_internal(files, save_dir, options, ui):
 def convert_to_csv_internal(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
     if not files: raise Exception("PDFファイルが含まれていません。")
+    
+    for f in files:
+        if not check_pdf_has_text(f):
+            raise Exception(f"ファイル「{os.path.basename(f)}」はスキャンされた画像（ラスターデータ）のため、標準ライブラリではデータを抽出できません。\nエンジンを「Gemini API」または「Tesseract」に変更して実行してください。")
+            
     crop_regions = options.get("crop_regions", [])
     for i, pdf_path in enumerate(files, 1):
         ui.update_overall(i, len(files), f"全体の進捗 ( {i} / {len(files)} ファイル )")
@@ -610,7 +636,11 @@ def aggregate_local_task(files, save_dir, options, ui):
                 if i in col_mapping:
                     idx = col_mapping[i]
                     if idx >= len(row): row.extend([""] * (idx - len(row) + 1))
-                    row[idx] = str(val).strip()
+                    
+                    if val is None or str(val).strip() == "None":
+                        row[idx] = ""
+                    else:
+                        row[idx] = str(val).strip()
             agg_rows.append(row)
 
     for i, f in enumerate(target_files, 1):
@@ -632,6 +662,8 @@ def aggregate_local_task(files, save_dir, options, ui):
         
     if agg_rows and save_dir:
         final_data = [agg_header] + [r + [""]*(len(agg_header)-len(r)) for r in agg_rows]
+        apply_text_inheritance(final_data)
+        
         if search_ext == "xlsx":
             wb = Workbook(); ws = wb.active; ws.title = "集約"
             for r_idx, r_data in enumerate(final_data, 1):
