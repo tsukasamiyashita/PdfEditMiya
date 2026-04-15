@@ -12,7 +12,7 @@ from engines import (
     extract_text_internal, convert_to_excel_internal, convert_to_csv_internal,
     convert_to_image_jpg, convert_to_image_png, convert_to_dxf,
     convert_to_image_tiff, convert_to_image_bmp, convert_to_svg,
-    extract_tesseract_task, aggregate_local_task
+    extract_tesseract_task, aggregate_local_task, combine_local_task
 )
 
 # ==============================
@@ -357,6 +357,7 @@ def update_ui():
     state_val = tk.NORMAL if is_active else tk.DISABLED
     btn_split.config(state=state_val); btn_rotate.config(state=state_val); btn_extract.config(state=state_val)
     btn_aggregate_local.config(state=state_val)
+    if 'btn_combine_local' in globals() and btn_combine_local: btn_combine_local.config(state=state_val)
     btn_merge.config(state=tk.NORMAL if state.current_mode=="folder" else tk.DISABLED)
     if not is_active: reset_crop_regions()
     toggle_extraction_settings()
@@ -578,6 +579,10 @@ data_action_frame = ttk.LabelFrame(action_container, text=" 📊 データ操作
 btn_extract = ttk.Button(data_action_frame, text="🚀 選択した抽出・変換を実行", command=run_selected_extraction, style="Danger.TButton"); btn_extract.pack(fill=tk.X, pady=(2, 4), ipady=4) 
 btn_aggregate_local = ttk.Button(data_action_frame, text="🧩 データ集約", command=lambda: safe_run(aggregate_local_task, "データ集約"), style="Purple.TButton")
 btn_aggregate_local.pack(fill=tk.X, pady=2)
+
+global btn_combine_local
+btn_combine_local = ttk.Button(data_action_frame, text="🔗 データ単純結合", command=lambda: safe_run(combine_local_task, "データ単純結合"), style="Primary.TButton")
+btn_combine_local.pack(fill=tk.X, pady=2)
 
 status_frame = ttk.Frame(main_container, style="Main.TFrame")
 status_frame.pack(fill=tk.X, pady=(2, 0))

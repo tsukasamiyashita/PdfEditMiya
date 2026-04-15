@@ -253,8 +253,11 @@ def apply_text_inheritance(final_aggregated_data):
 def merge_2d_arrays_horizontally(arrays_list):
     if not arrays_list: return []
     max_rows = max((len(arr) for arr in arrays_list), default=0)
+    if max_rows == 0:
+        max_rows = 1
     merged = []
-    region_max_cols = [max((len(row) for row in arr), default=0) if arr else 0 for arr in arrays_list]
+    # 抽出範囲にテキストデータが無い場合でも、最低1列の空のセル（列）を保証する
+    region_max_cols = [max((max((len(row) for row in arr), default=0) if arr else 0), 1) for arr in arrays_list]
     for r in range(max_rows):
         merged_row = []
         for i, arr in enumerate(arrays_list):

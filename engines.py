@@ -614,7 +614,7 @@ def aggregate_local_task(files, save_dir, options, ui):
     for f in files:
         if os.path.isdir(f):
             for fn in os.listdir(f):
-                if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "集約" not in fn:
+                if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "集約" not in fn and "結合" not in fn:
                     target_files_set.add(os.path.abspath(os.path.join(f, fn)))
         elif os.path.isfile(f):
             if any(f.lower().endswith(f".{ext}") for ext in search_exts): target_files_set.add(os.path.abspath(f))
@@ -660,7 +660,16 @@ def aggregate_local_task(files, save_dir, options, ui):
                 if rows: map_to_master(fname, rows[0], rows[1:])
         except Exception: pass
         
-    if agg_rows and save_dir:
+    if len(agg_header) <= 1 or not agg_rows:
+        raise Exception(
+            f"集約するデータまたは見出し（ヘッダー）が見つからなかったため、ファイルは作成されませんでした。\n\n"
+            f"【考えられる原因】\n"
+            f"・選択したフォルダ/ファイルに「{search_ext.upper()}」形式の有効なデータが含まれていない\n"
+            f"・対象ファイルの中身が完全に空である\n"
+            f"・抽出処理に失敗し、表の列名（見出し）やデータが正しく生成されていない"
+        )
+        
+    if save_dir:
         final_data = [agg_header] + [r + [""]*(len(agg_header)-len(r)) for r in agg_rows]
         apply_text_inheritance(final_data)
         
@@ -672,3 +681,66 @@ def aggregate_local_task(files, save_dir, options, ui):
         elif search_ext == "csv":
             with open(os.path.join(save_dir, f"データ集約_{run_timestamp}.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
                 csv.writer(f_out).writerows(final_data)
+
+# ==============================
+# データ単純結合タスク (ローカル)
+# ==============================
+def combine_local_task(files, save_dir, options, ui):
+    out_format = options.get("out_format", "xlsx")
+    search_ext = "xlsx" if out_format in ["jpg", "png", "dxf", "svg", "tiff", "bmp"] else out_format
+    run_timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    if not files: raise Exception("対象が選択されていません。")
+    search_exts = ["xlsx", "xlsm", "xls"] if search_ext == "xlsx" else [search_ext]
+    target_files_set = set()
+    for f in files:
+        if os.path.isdir(f):
+            for fn in os.listdir(f):
+                if any(fn.lower().endswith(f".{ext}") for ext in search_exts) and "集約" not in fn and "結合" not in fn:
+                    target_files_set.add(os.path.abspath(os.path.join(f, fn)))
+        elif os.path.isfile(f):
+            if any(f.lower().endswith(f".{ext}") for ext in search_exts): target_files_set.add(os.path.abspath(f))
+
+    target_files = sorted(list(target_files_set))
+    if not target_files: raise Exception("結合対象が見つかりません。")
+
+    combined_rows = []
+
+    for i, f in enumerate(target_files, 1):
+        if ui.is_cancelled(): return
+        ui.update_overall(i, len(target_files), f"結合中... ({i}/{len(target_files)})")
+        ext = os.path.splitext(f)[1].lower().strip('.')
+        fname = os.path.basename(f)
+        try:
+            if ext in ["xlsx", "xlsm"]:
+                wb = openpyxl.load_workbook(f, data_only=True)
+                for sheet in wb.sheetnames:
+                    for r in wb[sheet].iter_rows(values_only=True):
+                        # 空行以外は追加
+                        if any(c is not None and str(c).strip() != "" for c in r):
+                            combined_rows.append([fname] + [str(c) if c is not None else "" for c in r])
+                wb.close()
+            elif ext == "csv":
+                with open(f, "r", encoding="utf-8-sig") as f_in:
+                    for r in csv.reader(f_in):
+                        if any(c.strip() != "" for c in r):
+                            combined_rows.append([fname] + r)
+        except Exception: pass
+        
+    if not combined_rows:
+        raise Exception(
+            f"結合するデータが見つからなかったため、ファイルは作成されませんでした。\n\n"
+            f"【考えられる原因】\n"
+            f"・選択したフォルダ/ファイルに「{search_ext.upper()}」形式の有効なデータが含まれていない\n"
+            f"・対象ファイルの中身が完全に空である"
+        )
+        
+    if save_dir:
+        if search_ext == "xlsx":
+            wb = Workbook(); ws = wb.active; ws.title = "単純結合"
+            for r_idx, r_data in enumerate(combined_rows, 1):
+                for c_idx, val in enumerate(r_data, 1): ws.cell(row=r_idx, column=c_idx, value=sanitize_excel_text(val))
+            auto_adjust_excel_column_width(ws); wb.save(os.path.join(save_dir, f"データ結合_{run_timestamp}.xlsx"))
+        elif search_ext == "csv":
+            with open(os.path.join(save_dir, f"データ結合_{run_timestamp}.csv"), "w", encoding="utf-8-sig", newline="") as f_out:
+                csv.writer(f_out).writerows(combined_rows)
