@@ -37,30 +37,28 @@ def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
     指定された相対座標(rx1, ry1, rx2, ry2)のクロップ枠に対し、
     枠の境界に接している文字や図形（輪郭）が途切れないよう、
     輪郭が完全に含まれるようにピクセル座標レベルで枠を自動拡張して返す。
+    水平に近い線（高さが極小）の場合は、左右(X)の拡張を抑え、上下(Y)の拡張を優先する。
     """
     h, w = img_array.shape[:2]
     x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
     x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
     
-    # 枠が画像全体に近い場合はそのまま返す
+    # 水平線に近い判定（ページ高さの3%未満）
+    is_hotizontal_line = abs(ry2 - ry1) < 0.03
+
     if x1 == 0 and y1 == 0 and x2 == w and y2 == h:
         return x1, y1, x2, y2
 
-    # グレースケール化
     if len(img_array.shape) == 3:
         gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     else:
         gray = img_array.copy()
 
-    # コントラスト強調・ノイズ除去
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
     gray = cv2.medianBlur(gray, 3)
 
-    # 適応的二値化 (文字を白、背景を黒に)
     binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # 輪郭抽出
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     new_x1, new_y1, new_x2, new_y2 = x1, y1, x2, y2
@@ -69,23 +67,37 @@ def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
         cx, cy, cw, ch = cv2.boundingRect(cnt)
         cx1, cy1, cx2, cy2 = cx, cy, cx + cw, cy + ch
         
-        # 大きすぎる輪郭（ページ枠線や背景）や小さすぎる輪郭（ノイズ）は無視
         if cw > w * 0.5 or ch > h * 0.5: continue
         if cw < 3 or ch < 3: continue
             
-        # 輪郭のバウンディングボックスが元のクロップ枠と交差（接触）しているか判定
         if (cx1 <= x2 and cx2 >= x1 and cy1 <= y2 and cy2 >= y1):
-            new_x1 = min(new_x1, cx1)
-            new_y1 = min(new_y1, cy1)
-            new_x2 = max(new_x2, cx2)
-            new_y2 = max(new_y2, cy2)
+            # 文字の中心座標(Y)がなぞった範囲内にある場合のみ、その文字を抽出対象として枠を拡張する
+            # これにより、隣接する行がわずかに接触しただけで巻き込まれるのを防ぐ
+            cnt_mid_y = (cy1 + cy2) / 2
+            if not is_hotizontal_line or (y1 <= cnt_mid_y <= y2):
+                # 水平線モードの場合、左右(X)の拡張は元の枠から大きくはみ出さないように制限する
+                if is_hotizontal_line:
+                    # 文字の半分以上が枠内にある場合のみ、その文字を完全に含める
+                    if max(cx1, x1) <= min(cx2, x2) and (min(cx2, x2) - max(cx1, x1)) > cw * 0.5:
+                        new_x1 = min(new_x1, cx1)
+                        new_x2 = max(new_x2, cx2)
+                else:
+                    new_x1 = min(new_x1, cx1)
+                    new_x2 = max(new_x2, cx2)
+                
+                # Y（高さ）は文字が切れないよう常に完全に含める
+                new_y1 = min(new_y1, cy1)
+                new_y2 = max(new_y2, cy2)
             
-    # 画像サイズをはみ出さないように制限し、マージンを持たせる
     margin = 4
-    new_x1 = max(0, new_x1 - margin)
+    new_x1 = max(0, new_x1 - (0 if is_hotizontal_line else margin))
     new_y1 = max(0, new_y1 - margin)
-    new_x2 = min(w, new_x2 + margin)
+    new_x2 = min(w, new_x2 + (0 if is_hotizontal_line else margin))
     new_y2 = min(h, new_y2 + margin)
+    
+    # 水平線モードの場合、左右(X)に関しては自動拡張を一切行わず、ユーザーの指定した範囲(x1, x2)を厳守する
+    if is_hotizontal_line:
+        return x1, new_y1, x2, new_y2
     
     return new_x1, new_y1, new_x2, new_y2
 
@@ -164,13 +176,29 @@ def extract_text_internal(files, save_dir, options, ui):
                 if crop_regions:
                     page_texts = []
                     for idx, (rx1, ry1, rx2, ry2) in enumerate(crop_regions, 1):
-                        m = 0.005
-                        x0 = max(0, min(rx1, rx2) - m) * p.width
-                        top = max(0, min(ry1, ry2) - m) * p.height
-                        x1 = min(1, max(rx1, rx2) + m) * p.width
-                        bottom = min(1, max(ry1, ry2) + m) * p.height
+                        # 水平線（なぞり）モードかどうか判定
+                        is_line = abs(ry2 - ry1) < 0.03
+                        
+                        m_y = 0.005 # 上下のマージンは維持
+                        m_x = 0.0 if is_line else 0.005 # 線モードなら左右のマージンは無し
+                        
+                        x0 = max(0, min(rx1, rx2) - m_x) * p.width
+                        top = max(0, min(ry1, ry2) - m_y) * p.height
+                        x1 = min(1, max(rx1, rx2) + m_x) * p.width
+                        bottom = min(1, max(ry1, ry2) + m_y) * p.height
                         
                         cropped_page = p.crop((x0, top, x1, bottom), strict=False)
+                        
+                        # 水平線モードの場合、文字の中心(X, Yの両方)が中心範囲に入っているものだけを抽出対象とする
+                        if is_line:
+                            def filter_obj(obj):
+                                if obj.get("object_type") == "char":
+                                    mid_x = (obj["x0"] + obj["x1"]) / 2
+                                    mid_y = (obj["top"] + obj["bottom"]) / 2
+                                    return (x0 <= mid_x <= x1) and (top <= mid_y <= bottom)
+                                return True
+                            cropped_page = cropped_page.filter(filter_obj)
+
                         txt = cropped_page.extract_text(layout=True)
                         if txt: page_texts.append(f"--- 範囲{idx} ---\n{txt}")
                     if page_texts: text_list.append(f"【Page {j}】\n" + "\n".join(page_texts))
@@ -214,13 +242,28 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                 if crop_regions:
                     all_regions_data = []
                     for (rx1, ry1, rx2, ry2) in crop_regions:
-                        m = 0.005
-                        x0 = max(0, min(rx1, rx2) - m) * page.width
-                        top = max(0, min(ry1, ry2) - m) * page.height
-                        x1 = min(1, max(rx1, rx2) + m) * page.width
-                        bottom = min(1, max(ry1, ry2) + m) * page.height
+                        # 水平線（なぞり）モードかどうか判定
+                        is_line = abs(ry2 - ry1) < 0.03
+                        
+                        m_y = 0.005
+                        m_x = 0.0 if is_line else 0.005
+                        
+                        x0 = max(0, min(rx1, rx2) - m_x) * page.width
+                        top = max(0, min(ry1, ry2) - m_y) * page.height
+                        x1 = min(1, max(rx1, rx2) + m_x) * page.width
+                        bottom = min(1, max(ry1, ry2) + m_y) * page.height
                         
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
+                        
+                        # 水平線モードの場合、文字の中心(X, Yの両方)が中心範囲に入っているものだけを抽出対象とする
+                        if is_line:
+                            def filter_obj(obj):
+                                if obj.get("object_type") == "char":
+                                    mid_x = (obj["x0"] + obj["x1"]) / 2
+                                    mid_y = (obj["top"] + obj["bottom"]) / 2
+                                    return (x0 <= mid_x <= x1) and (top <= mid_y <= bottom)
+                                return True
+                            cropped_page = cropped_page.filter(filter_obj)
                         
                         tbls = []
                         if options.get("extract_mode") != "text":

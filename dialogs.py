@@ -801,6 +801,8 @@ class CropSelector:
 
         self.pdf_path = pdf_path
         self.zoom = 1.0
+        # 抽出モードに応じて線モード（水平線選択）か矩形モードかを判定
+        self.is_line_mode = (state.extract_mode_var.get() == "text")
         
         btn_frame = ttk.Frame(self.top, padding=10)
         btn_frame.pack(fill=tk.X)
@@ -816,7 +818,8 @@ class CropSelector:
         ttk.Button(zoom_frame, text="縮小 (-)", command=self.zoom_out, width=8).pack(side=tk.LEFT, padx=2)
         ttk.Button(zoom_frame, text="フィット", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
 
-        ttk.Label(btn_frame, text="【使い方】ドラッグで範囲選択。Ctrl+Z: 戻る / Ctrl+ホイール: 拡縮 / Shift+ホイール: 横スクロール", foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
+        help_text = "【使い方】クリック＆ドラッグで「水平の線」を引き、抽出したい行の位置を指定します（複数可）。" if self.is_line_mode else "【使い方】選びたい範囲をマウスでドラッグして囲みます（複数可）。"
+        ttk.Label(btn_frame, text=help_text, foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
 
         canvas_frame = ttk.Frame(self.top)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -830,9 +833,6 @@ class CropSelector:
 
         self.canvas = tk.Canvas(canvas_frame, cursor="cross", bg="white", xscrollcommand=self.hbar.set, yscrollcommand=self.vbar.set)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-
-        self.vbar.config(command=self.canvas.yview)
-        self.hbar.config(command=self.canvas.xview)
 
         self.start_x, self.start_y, self.current_rect, self.rectangles, self.redo_stack = None, None, None, [], []
         self.canvas.bind("<ButtonPress-1>", self.on_press)
@@ -865,7 +865,11 @@ class CropSelector:
         self.tk_image = ImageTk.PhotoImage(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
         self.canvas.delete("all"); self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image); self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         self.img_w, self.img_h = pix.width, pix.height
-        for r in self.rectangles: r['id'] = self.canvas.create_rectangle(r['rx1']*self.img_w, r['ry1']*self.img_h, r['rx2']*self.img_w, r['ry2']*self.img_h, outline="red", width=2)
+        for r in self.rectangles:
+            if r.get('is_line'):
+                r['id'] = self.canvas.create_line(r['rx1']*self.img_w, r['ry1']*self.img_h + (r['ry2']-r['ry1'])*0.5*self.img_h, r['rx2']*self.img_w, r['ry1']*self.img_h + (r['ry2']-r['ry1'])*0.5*self.img_h, fill="red", width=2)
+            else:
+                r['id'] = self.canvas.create_rectangle(r['rx1']*self.img_w, r['ry1']*self.img_h, r['rx2']*self.img_w, r['ry2']*self.img_h, outline="red", width=2)
 
     def zoom_in(self): self.zoom = min(5.0, self.zoom * 1.2); self.draw_image()
     def zoom_out(self): self.zoom = max(0.2, self.zoom / 1.2); self.draw_image()
@@ -884,13 +888,37 @@ class CropSelector:
         
     def on_press(self, event):
         self.start_x, self.start_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4))
-    def on_drag(self, event): self.canvas.coords(self.current_rect, self.start_x, self.start_y, self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        if self.is_line_mode:
+            self.current_rect = self.canvas.create_line(self.start_x, self.start_y, self.start_x, self.start_y, fill="red", width=2, dash=(4, 4))
+        else:
+            self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4))
+    def on_drag(self, event):
+        cur_x = self.canvas.canvasx(event.x)
+        cur_y = self.canvas.canvasy(event.y)
+        if self.is_line_mode:
+            self.canvas.coords(self.current_rect, self.start_x, cur_y, cur_x, cur_y)
+        else:
+            self.canvas.coords(self.current_rect, self.start_x, self.start_y, cur_x, cur_y)
     def on_release(self, event):
         end_x, end_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        if abs(end_x - self.start_x) > 10 and abs(end_y - self.start_y) > 10:
+        if self.is_line_mode:
             self.canvas.itemconfig(self.current_rect, dash=())
-            self.rectangles.append({'id': self.current_rect, 'rx1': min(self.start_x, end_x)/self.img_w, 'ry1': min(self.start_y, end_y)/self.img_h, 'rx2': max(self.start_x, end_x)/self.img_w, 'ry2': max(self.start_y, end_y)/self.img_h})
+            # 線の場合は、ドラッグ範囲のX座標を rx1, rx2 とし、Y座標を中心としたごく薄い矩形として保存する
+            ry = end_y / self.img_h
+            # 許容範囲を従来の半分（上下0.5%ずつ、計1%）に絞り、隣の行を拾いにくくする
+            tolerance = 0.005 
+            self.rectangles.append({
+                'id': self.current_rect, 
+                'rx1': min(self.start_x, end_x) / self.img_w, 
+                'ry1': max(0, ry - tolerance), 
+                'rx2': max(self.start_x, end_x) / self.img_w, 
+                'ry2': min(1.0, ry + tolerance),
+                'is_line': True
+            })
+            self.redo_stack.clear()
+        elif abs(end_x - self.start_x) > 10 and abs(end_y - self.start_y) > 10:
+            self.canvas.itemconfig(self.current_rect, dash=())
+            self.rectangles.append({'id': self.current_rect, 'rx1': min(self.start_x, end_x)/self.img_w, 'ry1': min(self.start_y, end_y)/self.img_h, 'rx2': max(self.start_x, end_x)/self.img_w, 'ry2': max(self.start_y, end_y)/self.img_h, 'is_line': False})
             self.redo_stack.clear()
         else: self.canvas.delete(self.current_rect)
 
@@ -903,7 +931,11 @@ class CropSelector:
     def redo(self):
         if self.redo_stack:
             rect = self.redo_stack.pop()
-            rect['id'] = self.canvas.create_rectangle(rect['rx1']*self.img_w, rect['ry1']*self.img_h, rect['rx2']*self.img_w, rect['ry2']*self.img_h, outline="red", width=2)
+            mid_y = rect['ry1']*self.img_h + (rect['ry2']-rect['ry1'])*0.5*self.img_h
+            if rect.get('is_line'):
+                rect['id'] = self.canvas.create_line(rect['rx1']*self.img_w, mid_y, rect['rx2']*self.img_w, mid_y, fill="red", width=2)
+            else:
+                rect['id'] = self.canvas.create_rectangle(rect['rx1']*self.img_w, rect['ry1']*self.img_h, rect['rx2']*self.img_w, rect['ry2']*self.img_h, outline="red", width=2)
             self.rectangles.append(rect)
 
     def clear_rects(self):
