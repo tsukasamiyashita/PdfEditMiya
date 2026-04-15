@@ -246,9 +246,11 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                     if options.get("extract_mode") == "text":
                         merged_row = []
                         for region_data in all_regions_data:
+                            region_texts = []
                             for r in region_data:
                                 for c in r:
-                                    if str(c).strip(): merged_row.append(str(c).strip())
+                                    if str(c).strip(): region_texts.append(str(c).strip())
+                            merged_row.append("\n".join(region_texts) if region_texts else "")
                         merged_table = [merged_row] if merged_row else [[""]]
                     else:
                         merged_table = merge_2d_arrays_horizontally(all_regions_data)
@@ -347,9 +349,11 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                     if options.get("extract_mode") == "text":
                         merged_row = []
                         for region_data in all_regions_data:
+                            region_texts = []
                             for r in region_data:
                                 for c in r:
-                                    if str(c).strip(): merged_row.append(str(c).strip())
+                                    if str(c).strip(): region_texts.append(str(c).strip())
+                            merged_row.append("\n".join(region_texts) if region_texts else "")
                         merged_table = [merged_row] if merged_row else [[""]]
                     else:
                         merged_table = merge_2d_arrays_horizontally(all_regions_data)
@@ -575,12 +579,14 @@ def extract_tesseract_task(files, save_dir, options, ui):
             if options.get("extract_mode") == "text":
                 merged_row = []
                 for region_data in all_regions_data:
+                    region_texts = []
                     for r in region_data:
                         for c in r:
-                            if str(c).strip(): merged_row.append(str(c).strip())
+                            val = str(c).strip()
+                            if val and val != "Error": region_texts.append(val)
+                    merged_row.append("\n".join(region_texts) if region_texts else "")
                 merged_data = [merged_row] if merged_row else [[""]]
-                max_cols = max((len(r) for r in merged_data), default=1)
-                final_data = [["ページ番号"] + [f"テキスト{i+1}" for i in range(max_cols)]]
+                final_data = [["ページ番号"] + ([f"範囲{idx+1}" for idx in range(len(cropped_images))] if crop_regions else ["抽出テキスト"])]
             else:
                 merged_data = merge_2d_arrays_horizontally(all_regions_data)
                 final_data = [["ページ番号"] + ([f"範囲{idx+1}" for idx in range(len(cropped_images))] if crop_regions else ["抽出テキスト"])]
