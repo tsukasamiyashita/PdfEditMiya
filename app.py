@@ -323,6 +323,40 @@ def on_save_mode_change():
     state.preset_save_dir = ""
     state.save_label.config(text="同じフォルダ" if state.save_option.get() == 1 else "未選択")
 
+def save_crop_preset():
+    if not state.selected_crop_regions:
+        messagebox.showwarning("警告", "保存する抽出範囲が設定されていません。")
+        return
+    path = filedialog.asksaveasfilename(
+        title="抽出範囲の設定を保存",
+        defaultextension=".json",
+        filetypes=[("JSONファイル", "*.json")],
+        initialfile="crop_preset.json"
+    )
+    if path:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state.selected_crop_regions, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("成功", f"設定を保存しました:\n{os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("エラー", f"保存に失敗しました:\n{e}")
+
+def load_crop_preset():
+    path = filedialog.askopenfilename(
+        title="抽出範囲の設定み込み",
+        filetypes=[("JSONファイル", "*.json")]
+    )
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list): raise ValueError("不正な形式です")
+            state.selected_crop_regions = data
+            update_ui()
+            messagebox.showinfo("成功", f"設定を読み込みました:\n{os.path.basename(path)}\n({len(data)}箇所の範囲)")
+        except Exception as e:
+            messagebox.showerror("エラー", f"読み込みに失敗しました:\n{e}")
+
 format_radiobuttons = {}
 def toggle_extraction_settings(*args):
     is_active = state.current_mode is not None
@@ -368,6 +402,9 @@ def update_ui():
             state.plan_indicator.config(text="🟢 無料枠 (Free)", foreground=COLOR_SUCCESS)
         else:
             state.plan_indicator.config(text="🔵 課金枠 (Paid)", foreground=PRIMARY)
+            
+    if state.btn_select_crop:
+        state.btn_select_crop.config(text=f"抽出範囲を選択 (設定済: {len(state.selected_crop_regions)}か所)" if state.selected_crop_regions else "抽出範囲を選択")
 
 def show_text_window(title, content):
     win = tk.Toplevel(root); win.title(title); win.geometry("620x550"); win.configure(bg=BG_COLOR)
@@ -554,7 +591,11 @@ global crop_frame, pdf_check_frame
 crop_frame = ttk.Frame(extract_frame, style="Card.TFrame"); crop_frame.pack(fill=tk.X, pady=(4, 0))
 ttk.Label(crop_frame, text="抽出範囲:", width=14, background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=TEXT_COLOR).pack(side=tk.LEFT)
 state.btn_select_crop = ttk.Button(crop_frame, text="抽出範囲を選択", command=open_crop_selector); state.btn_select_crop.pack(side=tk.LEFT)
-btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, style="Warning.TButton"); btn_reset_crop.pack(side=tk.LEFT, padx=(5, 0))
+btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_crop_regions, style="Warning.TButton"); btn_reset_crop.pack(side=tk.LEFT, padx=(5, 5))
+
+ttk.Label(crop_frame, text=" | プリセット:", background=CARD_BG, font=("Segoe UI", 9)).pack(side=tk.LEFT)
+ttk.Button(crop_frame, text="💾 保存", command=save_crop_preset, width=8).pack(side=tk.LEFT, padx=2)
+ttk.Button(crop_frame, text="📂 読込", command=load_crop_preset, width=8).pack(side=tk.LEFT, padx=2)
 
 pdf_check_frame = ttk.Frame(extract_frame, style="Card.TFrame")
 pdf_check_frame.pack(fill=tk.X, pady=(4, 0))
