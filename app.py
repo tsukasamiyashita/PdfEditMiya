@@ -578,11 +578,13 @@ btn_rotate = ttk.Button(pdf_action_frame, text="回転", command=lambda: safe_ru
 data_action_frame = ttk.LabelFrame(action_container, text=" 📊 データ操作 ", style="Card.TLabelframe", padding=4); data_action_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 btn_extract = ttk.Button(data_action_frame, text="🚀 選択した抽出・変換を実行", command=run_selected_extraction, style="Danger.TButton"); btn_extract.pack(fill=tk.X, pady=(2, 4), ipady=4) 
 btn_aggregate_local = ttk.Button(data_action_frame, text="🧩 データ集約", command=lambda: safe_run(aggregate_local_task, "データ集約"), style="Purple.TButton")
-btn_aggregate_local.pack(fill=tk.X, pady=2)
+btn_aggregate_local.pack(fill=tk.X, pady=(2, 0))
+ttk.Label(data_action_frame, text="※列名を自動認識して賢く名寄せ・結合します", font=("Segoe UI", 8), foreground=MUTED_TEXT, background=CARD_BG).pack(pady=(0, 4))
 
 global btn_combine_local
 btn_combine_local = ttk.Button(data_action_frame, text="🔗 データ単純結合", command=lambda: safe_run(combine_local_task, "データ単純結合"), style="Primary.TButton")
-btn_combine_local.pack(fill=tk.X, pady=2)
+btn_combine_local.pack(fill=tk.X, pady=(2, 0))
+ttk.Label(data_action_frame, text="※同じ列構成のファイルをそのまま縦に繋げます", font=("Segoe UI", 8), foreground=MUTED_TEXT, background=CARD_BG).pack(pady=(0, 4))
 
 status_frame = ttk.Frame(main_container, style="Main.TFrame")
 status_frame.pack(fill=tk.X, pady=(2, 0))
