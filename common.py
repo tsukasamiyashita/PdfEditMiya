@@ -3,6 +3,7 @@ import os
 import sys
 import re
 import ast
+import jaconv
 from openpyxl.utils import get_column_letter
 
 # ==============================
@@ -175,10 +176,16 @@ def get_api_key():
         with open(API_KEY_FILE, "r", encoding="utf-8") as f: return f.read().strip()
     return None
 
+def normalize_text(text):
+    """全角英数字と全角カタカナを半角に変換する"""
+    if not isinstance(text, str): return text
+    return jaconv.z2h(text, kana=True, digit=True, ascii=True)
+
 def sanitize_excel_text(text):
-    """Excelに書き込む際にエラーとなる制御文字を除去する"""
+    """Excelに書き込む際にエラーとなる制御文字を除去し、全角・半角正規化を適用する"""
     if text is None: return ""
-    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(text))
+    text = normalize_text(str(text))
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
 
 def auto_adjust_excel_column_width(ws):
     for col in ws.columns:

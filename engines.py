@@ -223,7 +223,7 @@ def extract_text_internal(files, save_dir, options, ui):
                     if txt: text_list.append(f"【Page {j}】\n{txt}")
         
         if text_list:
-            output_content = "\n\n".join(text_list)
+            output_content = normalize_text("\n\n".join(text_list))
         elif is_scanned_pdf:
             output_content = "このPDFは「画像（スキャンされたPDF）」として保存されており、標準ライブラリでは文字を読み取れません。\n「Gemini API」または「Tesseract」エンジンを使用して再試行してください。"
         else:
@@ -675,7 +675,7 @@ def extract_tesseract_task(files, save_dir, options, ui):
                     psm_val = 6 if crop_regions else 3
                     custom_config = f'--oem 3 --psm {psm_val}'
                     
-                    text = pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config)
+                    text = normalize_text(pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config))
                     
                     lines = [l.strip() for l in text.split('\n') if l.strip()]
                     if lines: all_regions_data.append([[l] for l in lines])

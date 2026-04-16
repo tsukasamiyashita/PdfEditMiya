@@ -291,7 +291,7 @@ def extract_gemini_task(files, save_dir, options, ui):
                             response = model.generate_content(contents, safety_settings=safety_settings)
                             
                         if not response.parts: raise Exception("安全フィルタ等によりブロックされました。")
-                        extracted_text = response.text.strip()
+                        extracted_text = normalize_text(response.text.strip())
                         success = True
                         break
                     except Exception as api_err: 
