@@ -801,6 +801,7 @@ class CropSelector:
 
         self.pdf_path = pdf_path
         self.zoom = 1.0
+        self.zoom_mode = False # 範囲指定ズームモード
         # 抽出モードに応じて線モード（水平線選択）か矩形モードかを判定
         self.is_line_mode = (state.extract_mode_var.get() == "text")
         
@@ -814,12 +815,13 @@ class CropSelector:
         
         zoom_frame = ttk.Frame(btn_frame)
         zoom_frame.pack(side=tk.RIGHT, padx=20)
-        ttk.Button(zoom_frame, text="拡大 (+)", command=self.zoom_in, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom_frame, text="縮小 (-)", command=self.zoom_out, width=8).pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom_frame, text="フィット", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
+        self.btn_zoom_range = ttk.Button(zoom_frame, text="🔍 範囲で拡大", command=self.toggle_zoom_mode, width=15)
+        self.btn_zoom_range.pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="全表示", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
 
-        help_text = "【使い方】クリック＆ドラッグで「水平の線」を引き、抽出したい行の位置を指定します（複数可）。" if self.is_line_mode else "【使い方】選びたい範囲をマウスでドラッグして囲みます（複数可）。"
-        ttk.Label(btn_frame, text=help_text, foreground=PRIMARY, font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT, padx=10)
+        self.help_lbl = ttk.Label(btn_frame, text="", foreground=PRIMARY, font=("Segoe UI", 10, "bold"))
+        self.help_lbl.pack(side=tk.LEFT, padx=10)
+        self.update_help_text()
 
         canvas_frame = ttk.Frame(self.top)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -863,7 +865,8 @@ class CropSelector:
     def draw_image(self):
         mat = fitz.Matrix(self.zoom, self.zoom); pix = self.page.get_pixmap(matrix=mat)
         self.tk_image = ImageTk.PhotoImage(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-        self.canvas.delete("all"); self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image); self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
+        self.canvas.delete("all"); self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         self.img_w, self.img_h = pix.width, pix.height
         for r in self.rectangles:
             if r.get('is_line'):
@@ -871,9 +874,68 @@ class CropSelector:
             else:
                 r['id'] = self.canvas.create_rectangle(r['rx1']*self.img_w, r['ry1']*self.img_h, r['rx2']*self.img_w, r['ry2']*self.img_h, outline="red", width=2)
 
-    def zoom_in(self): self.zoom = min(5.0, self.zoom * 1.2); self.draw_image()
-    def zoom_out(self): self.zoom = max(0.2, self.zoom / 1.2); self.draw_image()
-    def zoom_fit(self): self.zoom = min(2.0, (self.top.winfo_screenheight() * 0.7) / self.page.rect.height); self.draw_image()
+    def toggle_zoom_mode(self):
+        self.zoom_mode = not self.zoom_mode
+        self.btn_zoom_range.config(style="Primary.TButton" if self.zoom_mode else "TButton")
+        self.canvas.config(cursor="plus" if self.zoom_mode else "cross")
+        self.update_help_text()
+
+    def update_help_text(self):
+        if self.zoom_mode:
+            text = "【ズーム】拡大したい範囲をマウスで囲んでください。"
+        elif self.is_line_mode:
+            text = "【使い方】クリック＆ドラッグで「水平の線」を引き、抽出したい行の位置を指定します。"
+        else:
+            text = "【使い方】抽出したい範囲をマウスでドラッグして囲みます。"
+        self.help_lbl.config(text=text)
+
+    def zoom_in(self, event=None):
+        x = event.x if event else self.canvas.winfo_width()//2
+        y = event.y if event else self.canvas.winfo_height()//2
+        self.zoom_at_pos(1.2, x, y)
+        
+    def zoom_out(self, event=None):
+        x = event.x if event else self.canvas.winfo_width()//2
+        y = event.y if event else self.canvas.winfo_height()//2
+        self.zoom_at_pos(1/1.2, x, y)
+        
+    def zoom_fit(self):
+        self.zoom_mode = False
+        self.btn_zoom_range.config(style="TButton")
+        self.canvas.config(cursor="cross")
+        self.update_help_text()
+        
+        # ウィンドウサイズがまだ確定していない場合は画面サイズを基準にする
+        win_h = self.top.winfo_height()
+        if win_h < 100: win_h = self.top.winfo_screenheight() * 0.8
+        
+        # 画面の高さの8割程度に収まるようにズームをリセット
+        self.zoom = min(2.0, (win_h * 0.8) / self.page.rect.height)
+        self.draw_image()
+        self.canvas.xview_moveto(0)
+        self.canvas.yview_moveto(0)
+
+    def zoom_at_pos(self, factor, x, y):
+        # 拡大前のマウス位置（画像上の座標）を記録
+        old_img_x = self.canvas.canvasx(x)
+        old_img_y = self.canvas.canvasy(y)
+        
+        # ズーム倍率の制限
+        new_zoom = self.zoom * factor
+        if new_zoom < 0.1: new_zoom = 0.1
+        if new_zoom > 10.0: new_zoom = 10.0
+        
+        actual_factor = new_zoom / self.zoom
+        self.zoom = new_zoom
+        self.draw_image()
+        
+        # 拡大後の画像上の座標
+        new_img_x = old_img_x * actual_factor
+        new_img_y = old_img_y * actual_factor
+        
+        # マウス位置の下にある地点がズレないようにスクロール位置を調整
+        self.canvas.xview_moveto((new_img_x - x) / self.img_w)
+        self.canvas.yview_moveto((new_img_y - y) / self.img_h)
     
     def on_mousewheel_y(self, event): 
         if event.state & 0x0001: return # Shiftキー押下時は縦スクロールをキャンセル
@@ -882,25 +944,45 @@ class CropSelector:
         self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
         return "break"
     def on_mousewheel_zoom(self, event):
-        if event.delta > 0: self.zoom_in()
-        else: self.zoom_out()
+        if event.delta > 0: self.zoom_in(event)
+        else: self.zoom_out(event)
         return "break"
         
     def on_press(self, event):
         self.start_x, self.start_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        if self.is_line_mode:
+        if self.zoom_mode:
+            self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline=PRIMARY, width=2, dash=(4, 4))
+        elif self.is_line_mode:
             self.current_rect = self.canvas.create_line(self.start_x, self.start_y, self.start_x, self.start_y, fill="red", width=2, dash=(4, 4))
         else:
             self.current_rect = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red", width=2, dash=(4, 4))
     def on_drag(self, event):
         cur_x = self.canvas.canvasx(event.x)
         cur_y = self.canvas.canvasy(event.y)
-        if self.is_line_mode:
+        if self.zoom_mode:
+            self.canvas.coords(self.current_rect, self.start_x, self.start_y, cur_x, cur_y)
+        elif self.is_line_mode:
             self.canvas.coords(self.current_rect, self.start_x, cur_y, cur_x, cur_y)
         else:
             self.canvas.coords(self.current_rect, self.start_x, self.start_y, cur_x, cur_y)
     def on_release(self, event):
         end_x, end_y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        
+        if self.zoom_mode:
+            self.canvas.delete(self.current_rect)
+            rw, rh = abs(end_x - self.start_x), abs(end_y - self.start_y)
+            if rw > 10 and rh > 10:
+                # 選択範囲がキャンバスに収まるような倍率を計算
+                cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
+                factor = min(cw / rw, ch / rh)
+                self.zoom *= factor
+                self.draw_image()
+                # 選択範囲の左上が画面の左上に来るようにスクロール
+                self.canvas.xview_moveto(min(self.start_x, end_x) * factor / self.img_w)
+                self.canvas.yview_moveto(min(self.start_y, end_y) * factor / self.img_h)
+            self.toggle_zoom_mode() # モード解除
+            return
+
         if self.is_line_mode:
             self.canvas.itemconfig(self.current_rect, dash=())
             # 線の場合は、ドラッグ範囲のX座標を rx1, rx2 とし、Y座標を中心としたごく薄い矩形として保存する
