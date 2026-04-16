@@ -190,17 +190,18 @@ def extract_gemini_task(files, save_dir, options, ui):
             cropped_info = [] # 結合後のパース用メタデータ
             
             if crop_regions:
-                h, w = img_array.shape[:2]
+                h_img, w_img = img_array.shape[:2]
                 cropped_images = []
-                for (rx1, ry1, rx2, ry2) in crop_regions:
-                    # 水平線モード判定
-                    is_line = abs(ry2 - ry1) < 0.03
-                    # 表形式以外の抽出、または水平線モードの場合は、文字が切れないよう範囲を自動拡張する
+                for region in crop_regions:
+                    rx1, ry1, rx2, ry2 = region[:4]
+                    is_vert = region[4] if len(region) > 4 else False
+                    is_line = is_vert or abs(ry2 - ry1) < 0.03 or abs(rx2 - rx1) < 0.03
+                    
                     if not is_table_format or is_line:
                         x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
                     else:
-                        x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
-                        x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
+                        x1, y1 = int(min(rx1, rx2) * w_img), int(min(ry1, ry2) * h_img)
+                        x2, y2 = int(max(rx1, rx2) * w_img), int(max(ry1, ry2) * h_img)
                         
                     crop = img_array[y1:y2, x1:x2]
                     cropped_images.append(crop)

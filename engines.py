@@ -43,8 +43,9 @@ def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
     x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
     x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
     
-    # 水平線に近い判定（ページ高さの3%未満）
-    is_hotizontal_line = abs(ry2 - ry1) < 0.03
+    # なぞり方向の判定
+    is_v_line = abs(rx2 - rx1) < 0.03 and abs(ry2 - ry1) > abs(rx2 - rx1)
+    is_h_line = abs(ry2 - ry1) < 0.03 and not is_v_line
 
     if x1 == 0 and y1 == 0 and x2 == w and y2 == h:
         return x1, y1, x2, y2
@@ -71,40 +72,38 @@ def expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2):
         if cw < 3 or ch < 3: continue
             
         if (cx1 <= x2 and cx2 >= x1 and cy1 <= y2 and cy2 >= y1):
-            # 水平線モードの場合、ユーザーがなぞった「線の高さ（中心Y）」が文字の矩形と重なっている場合のみ拡張する
-            # これにより、隣接する行がわずかに接触しただけで巻き込まれるのをより厳密に防ぐ
-            if is_hotizontal_line:
+            if is_h_line:
+                # 水平線モード：ユーザーの引いた「水平線（中心Y）」が文字の矩形と重なっている場合のみ
                 target_y = (y1 + y2) / 2
                 expand_needed = (cy1 <= target_y <= cy2)
-                # また、文字の半分以上が線の左右端(x1, x2)の範囲内に収まっていることを条件に加える
                 if expand_needed:
-                    intersect_x1 = max(cx1, x1)
-                    intersect_x2 = min(cx2, x2)
-                    if (intersect_x2 - intersect_x1) < cw * 0.5:
-                        expand_needed = False
+                    intersect_x1, intersect_x2 = max(cx1, x1), min(cx2, x2)
+                    if (intersect_x2 - intersect_x1) < cw * 0.5: expand_needed = False
+            elif is_v_line:
+                # 垂直線モード：ユーザーの引いた「垂直線（中心X）」が文字の矩形と重なっている場合のみ
+                target_x = (x1 + x2) / 2
+                expand_needed = (cx1 <= target_x <= cx2)
+                if expand_needed:
+                    intersect_y1, intersect_y2 = max(cy1, y1), min(cy2, y2)
+                    if (intersect_y2 - intersect_y1) < ch * 0.5: expand_needed = False
             else:
                 expand_needed = True
 
             if expand_needed:
-                if not is_hotizontal_line:
+                if not is_v_line:
                     new_x1 = min(new_x1, cx1)
                     new_x2 = max(new_x2, cx2)
-                
-                # Y（高さ）は文字が切れないよう常に完全に含める
-                new_y1 = min(new_y1, cy1)
-                new_y2 = max(new_y2, cy2)
+                if not is_h_line:
+                    new_y1 = min(new_y1, cy1)
+                    new_y2 = max(new_y2, cy2)
             
     margin = 4
-    new_x1 = max(0, new_x1 - (0 if is_hotizontal_line else margin))
-    new_y1 = max(0, new_y1 - margin)
-    new_x2 = min(w, new_x2 + (0 if is_hotizontal_line else margin))
-    new_y2 = min(h, new_y2 + margin)
+    new_x1 = max(0, new_x1 - (0 if is_v_line else margin))
+    new_y1 = max(0, new_y1 - (0 if is_h_line else margin))
+    new_x2 = min(w, new_x2 + (0 if is_v_line else margin))
+    new_y2 = min(h, new_y2 + (0 if is_h_line else margin))
     
-    # 水平線モードの場合、左右(X)に関しては自動拡張を一切行わず、ユーザーの指定した範囲(x1, x2)を厳守する
-    if is_hotizontal_line:
-        return x1, new_y1, x2, new_y2
-    
-    return new_x1, new_y1, new_x2, new_y2
+    return (x1 if is_v_line else new_x1), (y1 if is_h_line else new_y1), (x2 if is_v_line else new_x2), (y2 if is_h_line else new_y2)
 
 # ==============================
 # コア処理関数群 (PDF編集・標準抽出)
@@ -180,12 +179,14 @@ def extract_text_internal(files, save_dir, options, ui):
                 
                 if crop_regions:
                     page_texts = []
-                    for idx, (rx1, ry1, rx2, ry2) in enumerate(crop_regions, 1):
-                        # 水平線（なぞり）モードかどうか判定
-                        is_line = abs(ry2 - ry1) < 0.03
+                    for idx, region in enumerate(crop_regions, 1):
+                        rx1, ry1, rx2, ry2 = region[:4]
+                        is_vert = region[4] if len(region) > 4 else False
+                        # 水平・垂直線モードの判定（明示的なフラグがない場合のフォールバックも含む）
+                        is_line = is_vert or abs(ry2 - ry1) < 0.03 or abs(rx2 - rx1) < 0.03
                         
-                        m_y = 0.005 # 上下のマージンは維持
-                        m_x = 0.0 if is_line else 0.005 # 線モードなら左右のマージンは無し
+                        m_y = 0.0 if (is_line and is_vert) else 0.005
+                        m_x = 0.0 if (is_line and not is_vert) else 0.005
                         
                         x0 = max(0, min(rx1, rx2) - m_x) * p.width
                         top = max(0, min(ry1, ry2) - m_y) * p.height
@@ -194,17 +195,25 @@ def extract_text_internal(files, save_dir, options, ui):
                         
                         cropped_page = p.crop((x0, top, x1, bottom), strict=False)
                         
-                        # 水平線モードの場合、ユーザーが引いた「線」が文字の矩形と重なっているものだけを抽出対象とする
                         if is_line:
-                            target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * p.height
-                            def filter_obj(obj):
-                                if obj.get("object_type") == "char":
-                                    mid_x = (obj["x0"] + obj["x1"]) / 2
-                                    # Y方向: 文字の矩形がユーザーの引いた「線」を跨いでいるか（重なっているか）
-                                    intersects_y = (obj["top"] <= target_y <= obj["bottom"])
-                                    return (x0 <= mid_x <= x1) and intersects_y
-                                return True
-                            cropped_page = cropped_page.filter(filter_obj)
+                            if is_vert:
+                                target_x = (min(rx1, rx2) + max(rx1, rx2)) / 2 * p.width
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_y = (obj["top"] + obj["bottom"]) / 2
+                                        intersects_x = (obj["x0"] <= target_x <= obj["x1"])
+                                        return (top <= mid_y <= bottom) and intersects_x
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
+                            else:
+                                target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * p.height
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_x = (obj["x0"] + obj["x1"]) / 2
+                                        intersects_y = (obj["top"] <= target_y <= obj["bottom"])
+                                        return (x0 <= mid_x <= x1) and intersects_y
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
 
                         txt = cropped_page.extract_text(layout=True)
                         if txt: page_texts.append(f"--- 範囲{idx} ---\n{txt}")
@@ -248,12 +257,13 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                 tables = []
                 if crop_regions:
                     all_regions_data = []
-                    for (rx1, ry1, rx2, ry2) in crop_regions:
-                        # 水平線（なぞり）モードかどうか判定
-                        is_line = abs(ry2 - ry1) < 0.03
+                    for region in crop_regions:
+                        rx1, ry1, rx2, ry2 = region[:4]
+                        is_vert = region[4] if len(region) > 4 else False
+                        is_line = is_vert or abs(ry2 - ry1) < 0.03 or abs(rx2 - rx1) < 0.03
                         
-                        m_y = 0.005
-                        m_x = 0.0 if is_line else 0.005
+                        m_y = 0.0 if (is_line and is_vert) else 0.005
+                        m_x = 0.0 if (is_line and not is_vert) else 0.005
                         
                         x0 = max(0, min(rx1, rx2) - m_x) * page.width
                         top = max(0, min(ry1, ry2) - m_y) * page.height
@@ -262,16 +272,25 @@ def convert_to_excel_internal(files, save_dir, options, ui):
                         
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
                         
-                        # 水平線モードの場合、ユーザーが引いた「線」が文字の矩形と重なっているものだけを抽出対象とする
                         if is_line:
-                            target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * page.height
-                            def filter_obj(obj):
-                                if obj.get("object_type") == "char":
-                                    mid_x = (obj["x0"] + obj["x1"]) / 2
-                                    intersects_y = (obj["top"] <= target_y <= obj["bottom"])
-                                    return (x0 <= mid_x <= x1) and intersects_y
-                                return True
-                            cropped_page = cropped_page.filter(filter_obj)
+                            if is_vert:
+                                target_x = (min(rx1, rx2) + max(rx1, rx2)) / 2 * page.width
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_y = (obj["top"] + obj["bottom"]) / 2
+                                        intersects_x = (obj["x0"] <= target_x <= obj["x1"])
+                                        return (top <= mid_y <= bottom) and intersects_x
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
+                            else:
+                                target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * page.height
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_x = (obj["x0"] + obj["x1"]) / 2
+                                        intersects_y = (obj["top"] <= target_y <= obj["bottom"])
+                                        return (x0 <= mid_x <= x1) and intersects_y
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
                         
                         tbls = []
                         if options.get("extract_mode") != "text":
@@ -372,12 +391,13 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                 tables = []
                 if crop_regions:
                     all_regions_data = []
-                    for (rx1, ry1, rx2, ry2) in crop_regions:
-                        # 水平線（なぞり）モードかどうか判定
-                        is_line = abs(ry2 - ry1) < 0.03
+                    for region in crop_regions:
+                        rx1, ry1, rx2, ry2 = region[:4]
+                        is_vert = region[4] if len(region) > 4 else False
+                        is_line = is_vert or abs(ry2 - ry1) < 0.03 or abs(rx2 - rx1) < 0.03
                         
-                        m_y = 0.005
-                        m_x = 0.0 if is_line else 0.005
+                        m_y = 0.0 if (is_line and is_vert) else 0.005
+                        m_x = 0.0 if (is_line and not is_vert) else 0.005
                         
                         x0 = max(0, min(rx1, rx2) - m_x) * page.width
                         top = max(0, min(ry1, ry2) - m_y) * page.height
@@ -386,16 +406,25 @@ def convert_to_csv_internal(files, save_dir, options, ui):
                         
                         cropped_page = page.crop((x0, top, x1, bottom), strict=False)
                         
-                        # 水平線モードの場合、ユーザーが引いた「線」が文字の矩形と重なっているものだけを抽出対象とする
                         if is_line:
-                            target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * page.height
-                            def filter_obj(obj):
-                                if obj.get("object_type") == "char":
-                                    mid_x = (obj["x0"] + obj["x1"]) / 2
-                                    intersects_y = (obj["top"] <= target_y <= obj["bottom"])
-                                    return (x0 <= mid_x <= x1) and intersects_y
-                                return True
-                            cropped_page = cropped_page.filter(filter_obj)
+                            if is_vert:
+                                target_x = (min(rx1, rx2) + max(rx1, rx2)) / 2 * page.width
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_y = (obj["top"] + obj["bottom"]) / 2
+                                        intersects_x = (obj["x0"] <= target_x <= obj["x1"])
+                                        return (top <= mid_y <= bottom) and intersects_x
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
+                            else:
+                                target_y = (min(ry1, ry2) + max(ry1, ry2)) / 2 * page.height
+                                def filter_obj(obj):
+                                    if obj.get("object_type") == "char":
+                                        mid_x = (obj["x0"] + obj["x1"]) / 2
+                                        intersects_y = (obj["top"] <= target_y <= obj["bottom"])
+                                        return (x0 <= mid_x <= x1) and intersects_y
+                                    return True
+                                cropped_page = cropped_page.filter(filter_obj)
                         
                         tbls = []
                         if options.get("extract_mode") != "text":
@@ -622,16 +651,17 @@ def extract_tesseract_task(files, save_dir, options, ui):
             
             cropped_images = []
             if crop_regions:
-                h, w = img_array.shape[:2]
-                for (rx1, ry1, rx2, ry2) in crop_regions:
-                    # 水平線モード判定
-                    is_line = abs(ry2 - ry1) < 0.03
-                    # 水平線モードまたはテキスト抽出モードの場合は、文字が切れないよう範囲拡張を行う
+                h_img, w_img = img_array.shape[:2]
+                for region in crop_regions:
+                    rx1, ry1, rx2, ry2 = region[:4]
+                    is_vert = region[4] if len(region) > 4 else False
+                    is_line = is_vert or abs(ry2 - ry1) < 0.03 or abs(rx2 - rx1) < 0.03
+                    # 水平線モード、垂直線モード、またはテキスト抽出モードの場合は範囲拡張
                     if out_format not in ["xlsx", "csv"] or is_line or options.get("extract_mode") == "text":
                         x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
                     else:
-                        x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
-                        x2, y2 = int(max(rx1, rx2) * w), int(max(ry1, ry2) * h)
+                        x1, y1 = int(min(rx1, rx2) * w_img), int(min(ry1, ry2) * h_img)
+                        x2, y2 = int(max(rx1, rx2) * w_img), int(max(ry1, ry2) * h_img)
                     cropped_images.append(img_array[y1:y2, x1:x2])
             else: cropped_images.append(img_array)
                 

@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.8.0"
+APP_TITLE, VERSION = "PdfEditMiya", "v2.9.0"
 WINDOW_WIDTH, WINDOW_HEIGHT = 840, 600
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
@@ -36,6 +36,10 @@ SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
+[ v2.9.0 ]
+- 【機能追加】縦書きテキストの抽出に対応しました。「テキストのみ抽出」モードで「縦書き（垂直線）」を選択することで、縦書きの文章をピンポイントで抽出可能です。
+- 【UI改善】抽出範囲の選択画面で、水平線（横書き用）と垂直線（縦書き用）を自由に切り替えられるようになりました。
+
 [ v2.8.0 ]
 - 【機能追加】抽出範囲選択画面に「🔍 範囲で拡大」ボタンを追加しました。ドラッグした範囲を拡大して詳細に確認できます。
 - 【UI改善】マウスホイールによる拡大・縮小がマウスカーソル位置を基準に行われるようになり、操作性が向上しました。
