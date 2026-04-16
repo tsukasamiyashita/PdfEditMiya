@@ -193,8 +193,10 @@ def extract_gemini_task(files, save_dir, options, ui):
                 h, w = img_array.shape[:2]
                 cropped_images = []
                 for (rx1, ry1, rx2, ry2) in crop_regions:
-                    # 表データ以外の場合は、枠に接している文字が切れないよう輪郭ベースで枠を拡張する
-                    if not is_table_format:
+                    # 水平線モード判定
+                    is_line = abs(ry2 - ry1) < 0.03
+                    # 表形式以外の抽出、または水平線モードの場合は、文字が切れないよう範囲を自動拡張する
+                    if not is_table_format or is_line:
                         x1, y1, x2, y2 = expand_crop_rect_for_intersecting_objects(img_array, rx1, ry1, rx2, ry2)
                     else:
                         x1, y1 = int(min(rx1, rx2) * w), int(min(ry1, ry2) * h)
