@@ -482,8 +482,18 @@ style.configure("Danger.TButton", background=COLOR_DANGER, foreground="white", b
 style.map("Danger.TButton", background=[("active", COLOR_DANGER_HOVER)])
 style.configure("Purple.TButton", background=COLOR_PURPLE, foreground="white", borderwidth=0)
 style.map("Purple.TButton", background=[("active", COLOR_PURPLE_HOVER)])
-style.configure("TRadiobutton", background=CARD_BG, font=("Segoe UI", 9), foreground=TEXT_COLOR)
-style.configure("TCheckbutton", background=CARD_BG, font=("Segoe UI", 9), foreground=TEXT_COLOR)
+style.configure("TRadiobutton", background=CARD_BG, font=("Segoe UI", 9), foreground=TEXT_COLOR, padding=(8, 4))
+style.map("TRadiobutton", 
+    background=[("selected", "#E7F1FF"), ("active", "#F8F9FA")],
+    foreground=[("selected", PRIMARY), ("active", PRIMARY)],
+    font=[("selected", ("Segoe UI", 9, "bold"))]
+)
+style.configure("TCheckbutton", background=CARD_BG, font=("Segoe UI", 9), foreground=TEXT_COLOR, padding=(8, 4))
+style.map("TCheckbutton", 
+    background=[("selected", "#E7F1FF"), ("active", "#F8F9FA")],
+    foreground=[("selected", PRIMARY), ("active", PRIMARY)],
+    font=[("selected", ("Segoe UI", 9, "bold"))]
+)
 
 menubar = Menu(root)
 help_menu = Menu(menubar, tearoff=0)
