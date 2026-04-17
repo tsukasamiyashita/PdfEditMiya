@@ -805,35 +805,64 @@ class CropSelector:
         # 抽出モードに応じて線モード（水平線選択）か矩形モードかを判定
         self.is_line_mode = (state.extract_mode_var.get() == "text")
         
-        btn_frame = ttk.Frame(self.top, padding=10)
-        btn_frame.pack(fill=tk.X)
+        # --- UI構造の構築 ---
+        # 1. ヘッダーエリア (タイトルと現在の操作ガイド)
+        header_area = ttk.Frame(self.top, style="Card.TFrame", padding=(15, 12))
+        header_area.pack(fill=tk.X)
         
-        ttk.Button(btn_frame, text="クリア", command=self.clear_rects, style="Warning.TButton").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="戻る", command=self.undo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="進む", command=self.redo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="設定して閉じる", command=self.save_and_close, style="Primary.TButton").pack(side=tk.RIGHT, padx=5)
+        title_lbl = ttk.Label(header_area, text="✂️ 抽出範囲の編集", font=("Segoe UI", 12, "bold"), foreground=PRIMARY, background=CARD_BG)
+        title_lbl.pack(side=tk.LEFT)
         
-        zoom_frame = ttk.Frame(btn_frame)
-        zoom_frame.pack(side=tk.RIGHT, padx=20)
-        self.btn_zoom_range = ttk.Button(zoom_frame, text="🔍 範囲で拡大", command=self.toggle_zoom_mode, width=15)
+        self.help_lbl = ttk.Label(header_area, text="", foreground=MUTED_TEXT, font=("Segoe UI", 10), background=CARD_BG)
+        self.help_lbl.pack(side=tk.LEFT, padx=(25, 0))
+
+        self.status_lbl = ttk.Label(header_area, text="", foreground=COLOR_PURPLE, font=("Segoe UI", 9, "bold"), background=CARD_BG)
+        self.status_lbl.pack(side=tk.RIGHT)
+
+        # 2. ツールバーエリア
+        toolbar = ttk.Frame(self.top, padding=(10, 8))
+        toolbar.pack(fill=tk.X)
+
+        # 編集ツール
+        edit_grp = ttk.LabelFrame(toolbar, text=" 編集ツール ", padding=8)
+        edit_grp.pack(side=tk.LEFT, padx=5)
+        ttk.Button(edit_grp, text="↩️ 戻る", command=self.undo, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(edit_grp, text="↪️ 進む", command=self.redo, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(edit_grp, text="🗑 全て消去", command=self.clear_rects, style="Warning.TButton", width=12).pack(side=tk.LEFT, padx=(10, 2))
+
+        # 表示・拡大ツール
+        view_grp = ttk.LabelFrame(toolbar, text=" 表示・ズーム ", padding=8)
+        view_grp.pack(side=tk.LEFT, padx=5)
+        self.btn_zoom_range = ttk.Button(view_grp, text="🔍 範囲で拡大", command=self.toggle_zoom_mode, width=15)
         self.btn_zoom_range.pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom_frame, text="全表示", command=self.zoom_fit, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(view_grp, text="🏠 全体表示", command=self.zoom_fit, width=10).pack(side=tk.LEFT, padx=2)
 
-        self.help_lbl = ttk.Label(btn_frame, text="", foreground=PRIMARY, font=("Segoe UI", 10, "bold"))
-        self.help_lbl.pack(side=tk.LEFT, padx=10)
-
+        # 抽出設定 (テキストモード時のみ)
         if self.is_line_mode:
             self.line_dir = tk.StringVar(value="h")
-            dir_frame = ttk.Frame(self.top, padding=(10, 5, 10, 5))
-            dir_frame.pack(fill=tk.X)
-            ttk.Label(dir_frame, text="抽出方向:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(10, 5))
-            ttk.Radiobutton(dir_frame, text="横書き (水平線)", variable=self.line_dir, value="h", command=self.update_help_text).pack(side=tk.LEFT, padx=10)
-            ttk.Radiobutton(dir_frame, text="縦書き (垂直線)", variable=self.line_dir, value="v", command=self.update_help_text).pack(side=tk.LEFT)
+            dir_grp = ttk.LabelFrame(toolbar, text=" 抽出設定 ", padding=8)
+            dir_grp.pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(dir_grp, text="横書き (水平線)", variable=self.line_dir, value="h", command=self.update_help_text).pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(dir_grp, text="縦書き (垂直線)", variable=self.line_dir, value="v", command=self.update_help_text).pack(side=tk.LEFT, padx=5)
+
+        # 確定・中止
+        app_grp = ttk.Frame(toolbar, padding=(5, 10))
+        app_grp.pack(side=tk.RIGHT, padx=5)
+        ttk.Button(app_grp, text="中止", command=self.cancel_and_close, width=10).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(app_grp, text="✅ 設定を確定して閉じる", command=self.save_and_close, style="Primary.TButton", width=22).pack(side=tk.RIGHT, padx=5)
+
+        ttk.Separator(self.top, orient="horizontal").pack(fill=tk.X, pady=(5, 10))
         
         self.update_help_text()
+        
+        # 3. 操作ガイド（フッター）
+        footer = ttk.Frame(self.top, style="Card.TFrame", padding=(15, 5))
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        guide_text = "🖱️ 【マウス操作】 ドラッグ: 範囲選択 / Ctrl+ホイール: 拡大縮小 / Shift+ホイール: 横スクロール / ホイール: 縦スクロール　　⌨️ 【ショートカット】 Ctrl+Z: 戻る / Ctrl+Y: 進む"
+        ttk.Label(footer, text=guide_text, font=("Segoe UI", 9), foreground=MUTED_TEXT, background=CARD_BG).pack(side=tk.LEFT)
 
         canvas_frame = ttk.Frame(self.top)
-        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
         canvas_frame.rowconfigure(0, weight=1)
         canvas_frame.columnconfigure(0, weight=1)
 
@@ -858,25 +887,41 @@ class CropSelector:
         self.top.bind("<Control-y>", lambda e: self.redo())
 
         try:
+            self.set_status("📄 PDFファイルを読み込み中...")
             self.doc = fitz.open(pdf_path)
             self.page = self.doc[0]
+            
+            # 先にウィンドウを最大化・確定させてからzoom_fitを呼ぶ
+            try: self.top.state('zoomed')
+            except: pass
+            self.top.update()
+            
             self.zoom_fit()
+            self.set_status("")
         except Exception as e:
             self.top.destroy()
             raise Exception(f"プレビュー生成失敗: {e}")
 
-        self.top.update_idletasks()
-        try: self.top.state('zoomed')
-        except Exception:
-            w, h = master.winfo_screenwidth(), master.winfo_screenheight()
-            self.top.geometry(f"{w}x{h}+0+0")
+        # 下記の古い最大化処理は削除
+        # self.top.update_idletasks()
+        # try: self.top.state('zoomed')
+        # except Exception:
+        #     w, h = master.winfo_screenwidth(), master.winfo_screenheight()
+        #     self.top.geometry(f"{w}x{h}+0+0")
+
+    def set_status(self, text):
+        if hasattr(self, 'status_lbl') and self.status_lbl:
+            self.status_lbl.config(text=text)
+            self.top.update_idletasks()
 
     def draw_image(self):
+        self.set_status("🖼️ プレビュー画像を生成中...")
         mat = fitz.Matrix(self.zoom, self.zoom); pix = self.page.get_pixmap(matrix=mat)
         self.tk_image = ImageTk.PhotoImage(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
         self.canvas.delete("all"); self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
         self.canvas.config(scrollregion=(0, 0, pix.width, pix.height))
         self.img_w, self.img_h = pix.width, pix.height
+        self.set_status("✏️ 選択範囲を再描画中...")
         for r in self.rectangles:
             if r.get('is_line'):
                 if r.get('is_vertical'):
@@ -889,6 +934,7 @@ class CropSelector:
                     r['id'] = self.canvas.create_line(r['rx1']*self.img_w, mid_y, r['rx2']*self.img_w, mid_y, fill="red", width=2)
             else:
                 r['id'] = self.canvas.create_rectangle(r['rx1']*self.img_w, r['ry1']*self.img_h, r['rx2']*self.img_w, r['ry2']*self.img_h, outline="red", width=2)
+        self.set_status("")
 
     def toggle_zoom_mode(self):
         self.zoom_mode = not self.zoom_mode
@@ -924,12 +970,26 @@ class CropSelector:
         self.canvas.config(cursor="cross")
         self.update_help_text()
         
-        # ウィンドウサイズがまだ確定していない場合は画面サイズを基準にする
-        win_h = self.top.winfo_height()
-        if win_h < 100: win_h = self.top.winfo_screenheight() * 0.8
+        # キャンバスの現在のサイズを取得 (取得できない場合はウィンドウサイズから推測)
+        cw = self.canvas.winfo_width() - 40
+        ch = self.canvas.winfo_height() - 40
         
-        # 画面の高さの8割程度に収まるようにズームをリセット
-        self.zoom = min(2.0, (win_h * 0.8) / self.page.rect.height)
+        if cw < 100 or ch < 100:
+            win_h = self.top.winfo_height()
+            win_w = self.top.winfo_width()
+            if win_h < 100: 
+                win_h = self.top.winfo_screenheight() * 0.8
+                win_w = self.top.winfo_screenwidth() * 0.8
+            cw, ch = win_w - 60, win_h - 180 # ツールバー分を多めに引く
+        
+        # 画面の幅と高さの両方に収まる最適なズームを計算
+        zoom_w = cw / self.page.rect.width
+        zoom_h = ch / self.page.rect.height
+        
+        self.zoom = min(zoom_w, zoom_h)
+        # 極端に大きすぎたり小さすぎたりしないように制限
+        self.zoom = max(0.2, min(self.zoom, 3.0))
+        
         self.draw_image()
         self.canvas.xview_moveto(0)
         self.canvas.yview_moveto(0)
@@ -1072,6 +1132,9 @@ class CropSelector:
             state.preset_filename_label.config(text=state.loaded_preset_name)
         self.doc.close(); self.top.destroy()
 
+    def cancel_and_close(self):
+        self.doc.close(); self.top.destroy()
+
 def open_crop_selector():
     files = state.selected_files if state.current_mode == "file" else ([os.path.join(state.selected_folder, f) for f in os.listdir(state.selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))] if state.selected_folder else [])
     pdf_files = [f for f in files if f.lower().endswith('.pdf')]
@@ -1125,6 +1188,8 @@ def show_pdf_type_info():
         
         for i, pdf_path in enumerate(pdf_files[:max_files_to_check]):
             filename = os.path.basename(pdf_path)
+            lbl.config(text=f"解析中 ({i+1}/{len(pdf_files)}): {filename}")
+            win.update_idletasks()
             try:
                 doc = fitz.open(pdf_path)
                 if len(doc) == 0:
