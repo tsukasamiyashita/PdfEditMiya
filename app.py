@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 import os, sys, json, threading
+try:
+    import windnd
+    HAS_WINDND = True
+except ImportError:
+    HAS_WINDND = False
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu
 import tkinter.scrolledtext as st
@@ -644,6 +649,13 @@ state.status_label.pack(side=tk.LEFT, padx=5)
 
 state.engine_var.trace("w", toggle_extraction_settings)
 state.output_format_var.trace("w", toggle_extraction_settings)
+
+# ドラッグ&ドロップを有効化
+if HAS_WINDND:
+    try:
+        windnd.drop_files(root, func=handle_drop)
+    except Exception as e:
+        print(f"Drag and Drop initialization failed: {e}")
 
 load_settings()
 update_ui()
