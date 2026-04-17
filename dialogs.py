@@ -1065,8 +1065,11 @@ class CropSelector:
         self.redo_stack.clear()
     def save_and_close(self):
         state.selected_crop_regions = [(r['rx1'], r['ry1'], r['rx2'], r['ry2'], r.get('is_vertical', False)) for r in self.rectangles]
+        state.loaded_preset_name = "カスタム"
         if state.btn_select_crop:
             state.btn_select_crop.config(text=f"抽出範囲を選択 (設定済: {len(state.selected_crop_regions)}か所)" if state.selected_crop_regions else "抽出範囲を選択")
+        if state.preset_filename_label:
+            state.preset_filename_label.config(text=state.loaded_preset_name)
         self.doc.close(); self.top.destroy()
 
 def open_crop_selector():
@@ -1078,8 +1081,11 @@ def open_crop_selector():
 
 def reset_crop_regions():
     state.selected_crop_regions = []
+    state.loaded_preset_name = "未読込"
     if state.btn_select_crop:
         state.btn_select_crop.config(text="抽出範囲を選択")
+    if state.preset_filename_label:
+        state.preset_filename_label.config(text=state.loaded_preset_name)
 
 # ==============================
 # PDFデータ確認ツール (PDFアナライザー)

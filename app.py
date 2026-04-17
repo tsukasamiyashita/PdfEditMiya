@@ -337,6 +337,8 @@ def save_crop_preset():
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(state.selected_crop_regions, f, ensure_ascii=False, indent=2)
+            state.loaded_preset_name = os.path.basename(path)
+            update_ui()
             messagebox.showinfo("成功", f"設定を保存しました:\n{os.path.basename(path)}")
         except Exception as e:
             messagebox.showerror("エラー", f"保存に失敗しました:\n{e}")
@@ -352,6 +354,7 @@ def load_crop_preset():
                 data = json.load(f)
             if not isinstance(data, list): raise ValueError("不正な形式です")
             state.selected_crop_regions = data
+            state.loaded_preset_name = os.path.basename(path)
             update_ui()
             messagebox.showinfo("成功", f"設定を読み込みました:\n{os.path.basename(path)}\n({len(data)}箇所の範囲)")
         except Exception as e:
@@ -393,7 +396,9 @@ def update_ui():
     btn_aggregate_local.config(state=state_val)
     if 'btn_combine_local' in globals() and btn_combine_local: btn_combine_local.config(state=state_val)
     btn_merge.config(state=tk.NORMAL if state.current_mode=="folder" else tk.DISABLED)
-    if not is_active: reset_crop_regions()
+    if not is_active: 
+        reset_crop_regions()
+        state.loaded_preset_name = "未読込"
     toggle_extraction_settings()
     
     if state.plan_indicator:
@@ -405,6 +410,9 @@ def update_ui():
             
     if state.btn_select_crop:
         state.btn_select_crop.config(text=f"抽出範囲を選択 (設定済: {len(state.selected_crop_regions)}か所)" if state.selected_crop_regions else "抽出範囲を選択")
+    
+    if state.preset_filename_label:
+        state.preset_filename_label.config(text=state.loaded_preset_name)
 
 def show_text_window(title, content):
     win = tk.Toplevel(root); win.title(title); win.geometry("620x550"); win.configure(bg=BG_COLOR)
@@ -596,6 +604,8 @@ btn_reset_crop = ttk.Button(crop_frame, text="全体に戻す", command=reset_cr
 ttk.Label(crop_frame, text=" | プリセット:", background=CARD_BG, font=("Segoe UI", 9)).pack(side=tk.LEFT)
 ttk.Button(crop_frame, text="💾 保存", command=save_crop_preset, width=8).pack(side=tk.LEFT, padx=2)
 ttk.Button(crop_frame, text="📂 読込", command=load_crop_preset, width=8).pack(side=tk.LEFT, padx=2)
+state.preset_filename_label = ttk.Label(crop_frame, text="未読込", background=CARD_BG, font=("Segoe UI", 9, "bold"), foreground=COLOR_PURPLE)
+state.preset_filename_label.pack(side=tk.LEFT, padx=(5, 0))
 
 pdf_check_frame = ttk.Frame(extract_frame, style="Card.TFrame")
 pdf_check_frame.pack(fill=tk.X, pady=(4, 0))

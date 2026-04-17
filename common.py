@@ -301,6 +301,7 @@ class SharedState:
         self.selected_crop_regions = []
         self.cancelled = False
         self.saved_custom_prompts = []
+        self.loaded_preset_name = "未読込"
         
         # 外部から更新が必要なUIウィジェットへの参照
         self.path_label = None
@@ -309,6 +310,7 @@ class SharedState:
         self.btn_api_settings = None
         self.plan_indicator = None # プラン表示用
         self.status_label = None
+        self.preset_filename_label = None
 
         # Tkinter Variables
         self.rotate_option = None
