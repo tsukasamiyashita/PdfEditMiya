@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 # ==============================
 # 基本設定 & カラーパレット
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.10.0"
+APP_TITLE, VERSION = "PdfEditMiya", "v2.11.0"
 WINDOW_WIDTH, WINDOW_HEIGHT = 840, 600
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
@@ -37,6 +37,9 @@ SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json")
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
+[ v2.11.0 ]
+- 【機能改善】「PDF結合」実行時、ファイル名の数字を考慮した自然順（例: 1.pdf → 2.pdf → 10.pdf）で昇順ソートしてから結合するように改善しました。
+
 [ v2.10.0 ]
 - 【UIリデザイン】抽出範囲の選択画面を、よりモダンで機能的なレイアウトに大幅に刷新しました。
 - 【機能追加】抽出範囲の選択画面に「中止」ボタンを追加。設定を保存せずに前の画面に戻ることが可能になりました。

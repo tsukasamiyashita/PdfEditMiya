@@ -26,7 +26,8 @@ from common import (
     sanitize_excel_text,
     merge_2d_arrays_horizontally,
     parse_row_data,
-    apply_text_inheritance
+    apply_text_inheritance,
+    normalize_text
 )
 
 # ==============================
@@ -121,6 +122,12 @@ def check_pdf_has_text(pdf_path):
 
 def merge_pdfs(files, save_dir, options, ui):
     files = [f for f in files if f.lower().endswith(".pdf")]
+    
+    # ファイル名の自然順（数字を数値として評価）で昇順ソート
+    def natural_sort_key(s):
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', os.path.basename(s))]
+    files.sort(key=natural_sort_key)
+    
     if not files: raise Exception("PDFファイルが含まれていません。")
     writer = PdfWriter()
     ui.update_overall(0, len(files), f"全体の進捗 ( 0 / {len(files)} ファイル )")
@@ -678,9 +685,12 @@ def extract_tesseract_task(files, save_dir, options, ui):
                     text = normalize_text(pytesseract.image_to_string(Image.fromarray(processed_img), lang="jpn+jpn_vert+eng", config=custom_config))
                     
                     lines = [l.strip() for l in text.split('\n') if l.strip()]
-                    if lines: all_regions_data.append([[l] for l in lines])
-                    else: all_regions_data.append([[""]])
-                except Exception: all_regions_data.append([["Error"]])
+                    if lines:
+                        all_regions_data.append([[l] for l in lines])
+                    else:
+                        all_regions_data.append([[""]])
+                except Exception:
+                    all_regions_data.append([["Error"]])
                     
             if options.get("extract_mode") == "text":
                 merged_row = []
