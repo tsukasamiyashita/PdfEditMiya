@@ -3,14 +3,19 @@ import os
 import sys
 import re
 import ast
-import jaconv
+import urllib.parse
+import unicodedata
+try:
+    import jaconv
+except ImportError:
+    jaconv = None
 from openpyxl.utils import get_column_letter
 
 # ==============================
-# 基本設定 & カラーパレット
+# 基本設定 & カラーパレット (常時ライトモード固定)
 # ==============================
-APP_TITLE, VERSION = "PdfEditMiya", "v2.11.0"
-WINDOW_WIDTH, WINDOW_HEIGHT = 840, 600
+APP_TITLE, VERSION = "PdfEditMiya", "v3.0.0"
+WINDOW_WIDTH, WINDOW_HEIGHT = 840, 620
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -28,15 +33,25 @@ APP_DIR = os.path.join(USER_HOME, "PdfEditMiya")
 
 # 保存用フォルダが存在しない場合は作成
 if not os.path.exists(APP_DIR):
-    os.makedirs(APP_DIR)
+    os.makedirs(APP_DIR, exist_ok=True)
 
 API_KEY_FILE = os.path.join(APP_DIR, ".pdfeditmiya_api_key.txt")
-SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json") 
+AZURE_API_KEY_FILE = os.path.join(APP_DIR, ".pdfeditmiya_azure_api_key.txt")
+SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json")
 
 # ==============================
 # ヘルプ・履歴テキスト
 # ==============================
 VERSION_HISTORY = """
+[ v3.0.0 ]
+- 【大型機能追加】「Azure OpenAI Service API」に完全対応しました。法人・セキュア環境でもGPT-4oやGPT-4.1等の最新AIモデルを使用して、手書き文字や複雑な表を高精度に抽出できます。
+- 【UIリデザイン】「ヘルプ ＆ ガイドセンター」を新設しました。カード型レイアウト・比較表・カラーバッジ・ワンクリックで開く公式リンクボタン・FAQを搭載し、直感的で見やすいデザインに刷新しました。
+- 【UI強化】AI詳細設定画面を拡張し、「Gemini 無料枠」「Gemini 課金枠」「Azure OpenAI Service」の3つの設定をタブで一元管理・接続テストできるようになりました。
+- 【機能改善】抽出範囲の選択画面を開く際、現在設定中またはプリセットから読み込んだ抽出範囲をキャンバス上に復元し、確認や追加・再編集ができるように改善しました。
+- 【不具合修正】抽出範囲を指定した状態で画像（JPEG/PNG/TIFF/BMP）・SVG・DXFへ変換する際にエラーが発生する問題を修正しました。
+- 【機能改善】Tesseract OCRでのJSON / Markdown / Word出力への対応、および「データ集約」「データ単純結合」での旧Excel (.xls) / JSON / テキスト形式等のサポートと自然順ソートを拡充しました。
+- 【操作性・安定性向上】すべてのPDF処理・変換タスクにおける中止ボタンの即時応答化、スクロールバー連動の修正、メモリ・ファイルハンドルの解放処理を強化しました。
+
 [ v2.11.0 ]
 - 【機能改善】「PDF結合」実行時、ファイル名の数字を考慮した自然順（例: 1.pdf → 2.pdf → 10.pdf）で昇順ソートしてから結合するように改善しました。
 
@@ -48,7 +63,7 @@ VERSION_HISTORY = """
 - 【操作性向上】画面下部にマウス操作やショートカットキーの「操作ガイド」を常時表示し、不慣れな方でも迷わず操作できるようになりました。
 - 【機能追加】「データ単純結合」ボタンを実装。同じ列構成のファイルを、内容を加工せずにそのまま縦に繋げることができます。
 - 【精度向上】「テキストのみ抽出（水平線選択）」において、文字の中心座標ではなく「線が文字に触れているか」で判定する高精度ロジックを採用。隣接する行の誤混入を大幅に削減しました。
-- 【データ処理改善】全ての抽出テキストに対し「全角英数字・全角カナを半角に自動変換（正規化）」する機能を標準搭載。データ集権後の加工の手間を省きます。
+- 【データ処理改善】全ての抽出テキストに対し「全角英数字・全角カナを半角に自動変換（正規化）」する機能を標準搭載。データ集約後の加工の手間を省きます。
 - 【視認性向上】メイン画面の各種設定（エンジン・形式・モード）の選択状態を「青色・太字・背景強調」に更新し、一目で設定内容を把握できるようになりました。
 - 【状況把握】処理中の「リアルタイム・モニター」を強化。PDF読み込み、AI解析、Excel保存などの詳細な状況がリアルタイムに表示されます。
 - 【解析強化】PDFアナライザー（データ構造の確認）において、解析中のファイル名を個別に表示するように改善しました。
@@ -77,13 +92,13 @@ AI_HELP_TEXT = """
 【 AI抽出機能の使い方と準備 】
 
 PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキスト・Word・JSON・Markdownデータとして抽出する機能です。
-用途に合わせて2つのAIエンジンを切り替えて使用できます。
+用途や環境に合わせてAIエンジンやローカルOCRを切り替えて使用できます。
 
 ───────────────────────────
-■ Gemini API を使う場合（推奨・超高精度）
+■ 1. Gemini API を使う場合（個人・一般利用にも推奨・超高精度）
 ───────────────────────────
-最新のAIモデルを利用し、かすれた文字や複雑な表の罫線を高精度に認識します。
-インターネット接続と、無料の「APIキー」が必要です。
+Googleの最新AIモデルを利用し、かすれた文字や複雑な表の罫線を高精度に認識します。
+インターネット接続と、Google AI Studioの「APIキー」が必要です。
 
 [APIキーの取得手順]
 1. ブラウザで以下のURLにアクセスします。
@@ -95,7 +110,22 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 6. 本アプリの「詳細設定」ボタンを押し、開いた画面の「APIキー」欄で右クリックして貼り付け、「テスト」ボタンを押してください。
 
 ───────────────────────────
-■ Tesseract（ローカルOCR）を使う場合（オフライン環境向け）
+■ 2. Azure OpenAI Service を使う場合（法人・セキュア環境向け）
+───────────────────────────
+Microsoft Azure 上に構築された企業向け OpenAI API（GPT-4o / GPT-4.1 等）を利用します。
+入力データが外部のAI学習に利用されないセキュアな環境で、高精度なデータ抽出を行えます。
+
+[設定手順]
+1. Azure Portal または Azure AI Foundry (旧 Azure OpenAI Studio) を開きます。
+2. 作成した Azure OpenAI リソースから以下の3つの情報を確認します。
+   ・エンドポイント (例: https://xxxx.openai.azure.com/)
+   ・APIキー (KEY 1 または KEY 2)
+   ・デプロイ名 (画像認識に対応した gpt-4o や gpt-4o-mini、gpt-4.1 等のモデルデプロイ名)
+3. 本アプリのエンジンで「Azure OpenAI API」を選択し、「詳細設定」ボタンを押します。
+4. 「Azure OpenAI Service」タブにエンドポイント、APIキー、デプロイ名を入力し、「テスト」ボタンを押して通信を確認してください。
+
+───────────────────────────
+■ 3. Tesseract（ローカルOCR）を使う場合（オフライン環境向け）
 ───────────────────────────
 インターネットに接続できない環境でもご利用いただける無料の文字認識機能です。
 ご利用には、事前に専用ソフトのインストールが必要です。以下の手順でご準備ください。
@@ -107,8 +137,8 @@ PDF内の表データや手書き文字を解析し、Excel(xlsx)・CSV・テキ
 3. 【重要】インストール中の「Choose Components（追加機能の選択）」画面で、
    「Additional language data (download)」の左側にある「+」を展開し、
    「Japanese」と「Japanese (vertical)」の2箇所に必ずチェックを入れてください。
-4. 「Destination Folder（インストール先）」は絶対に場所を変更せず
-   （初期設定の C:\Program Files\Tesseract-OCR のまま）最後まで完了させてください。
+4. 「Destination Folder（インストール先）」は場所を変更せず
+   （初期設定の C:\\Program Files\\Tesseract-OCR のまま）最後まで完了させてください。
 """
 
 PDF_TYPE_HELP_TEXT = """
@@ -147,30 +177,376 @@ PDFファイルは、画面上の見た目は同じでも、作成された方�
 ・性質：
   拡大するとモザイク状に粗く（ギザギザに）なります。
   スキャナで読み取っただけのPDFは、ページ全体が「1枚の写真（ラスターデータ）」として保存されており、文字に見える部分も単なる「画像の模様」でしかありません。
-  そのため、文字を選択したり検索したりできず、テキスト化するにはAIやOCR（画像認識技術）を使って画像から文字を推測・解読する必要があります。
+  そのため、文字を選択したり検索したりできず、テキスト化するにはAI（Gemini / Azure OpenAI）やOCR（画像認識技術）を使って画像から文字を推測・解読する必要があります。
 """
 
 # ==============================
 # 共通ユーティリティ関数
 # ==============================
 def resource_path(relative_path):
-    try: base_path = sys._MEIPASS
-    except Exception: base_path = os.path.abspath(".")
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
 def get_api_key():
     if os.path.exists(API_KEY_FILE):
-        with open(API_KEY_FILE, "r", encoding="utf-8") as f: return f.read().strip()
+        try:
+            with open(API_KEY_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
     return None
+
+def get_azure_api_key():
+    if os.path.exists(AZURE_API_KEY_FILE):
+        try:
+            with open(AZURE_API_KEY_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    return ""
+
+def parse_azure_endpoint_info(endpoint_str, deployment_str="", api_version_str=""):
+    """
+    ユーザーが入力したAzureエンドポイントURLを解析・正規化する。
+    ベースURL（https://xxx.openai.azure.com/）だけでなく、
+    誤ってターゲットURI全体（https://xxx.openai.azure.com/openai/deployments/my-dep/chat/completions?api-version=...）
+    が貼り付けられた場合でも、自動的にベースURL・デプロイ名・APIバージョンを抽出して補完する。
+    """
+    raw_ep = (endpoint_str or "").strip()
+    dep = (deployment_str or "").strip()
+    ver = (api_version_str or "").strip() or "2024-10-21"
+
+    if not raw_ep:
+        return "", dep, ver
+
+    if not raw_ep.startswith(("http://", "https://")):
+        raw_ep = "https://" + raw_ep
+
+    try:
+        parsed = urllib.parse.urlparse(raw_ep)
+        base_endpoint = f"{parsed.scheme}://{parsed.netloc}/"
+
+        # パスに /deployments/{deployment_name} が含まれている場合、デプロイ名を抽出
+        m_dep = re.search(r'/deployments/([^/]+)', parsed.path)
+        if m_dep and not dep:
+            dep = urllib.parse.unquote(m_dep.group(1))
+
+        # クエリに api-version が含まれている場合、抽出
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "api-version" in qs and qs["api-version"]:
+            if not api_version_str or api_version_str.strip() == "":
+                ver = qs["api-version"][0]
+
+        return base_endpoint, dep, ver
+    except Exception:
+        return raw_ep, dep, ver
+
+def diagnose_api_error(provider, error, model_or_deployment="", endpoint=""):
+    """
+    Gemini API / Azure OpenAI Service で発生したエラーを解析し、
+    利用者が原因と対処法をひと目で理解できる構造化情報(dict)を返す。
+    """
+    err_str = str(error)
+    err_lower = err_str.lower()
+    target_name = model_or_deployment or "未指定"
+
+    # 共通のネットワーク系エラー判定
+    network_keywords = [
+        "getaddrinfo failed", "name resolution", "nameresolutionerror",
+        "connectionerror", "connecttimeout", "readtimeout", "timed out",
+        "urlopen error", "ssl:", "certificate", "proxy", "winerror 10060",
+        "winerror 10061", "remote disconnected", "connection refused"
+    ]
+    if any(k in err_lower for k in network_keywords):
+        actions = [
+            "インターネット接続が有効か確認してください。",
+            "社内ネットワークやプロキシ環境をお使いの場合、AIサービスへの通信が制限されていないか確認してください。"
+        ]
+        if provider == "azure" and endpoint:
+            actions.insert(0, f"エンドポイントURL「{endpoint}」にスペルミスや余分な文字がないか確認してください。")
+        return {
+            "kind": "network",
+            "title": "ネットワーク / URL接続エラー",
+            "summary": "AIサーバーへの接続が確立できませんでした（通信経路またはURLの問題）。",
+            "causes": [
+                "入力したエンドポイントURLのホスト名が間違っているか、存在しません。" if provider == "azure" else "APIサーバーへ到達できませんでした。",
+                "インターネットに接続されていない、または社内プロキシ・ファイアウォールにブロックされています。",
+                "通信がタイムアウトしました。"
+            ],
+            "actions": actions,
+            "raw": err_str
+        }
+
+    if provider == "azure":
+        # 1. サブスクリプションのクォータ初期化中 (HTTP 403)
+        if "instant inference quota" in err_lower or "still being initialized" in err_lower:
+            return {
+                "kind": "init_quota",
+                "title": "Azure クォータ初期化中 (HTTP 403)",
+                "summary": "Azure側で新しく作成したサブスクリプション／リソースの推論利用枠（クォータ）がまだ準備中です。",
+                "causes": [
+                    "APIやサブスクリプションを作成した直後のため、Azure側のバックエンドでモデル利用枠（TPM）の割り当て処理が進行中です。",
+                    "アプリの設定ミスやリクエストの送りすぎ（429エラー）ではなく、Azure側の利用準備待ち状態です。"
+                ],
+                "actions": [
+                    "作成直後の場合は、数分〜数十分ほど待ってから再度「🔌 接続テスト」を実行してください。",
+                    "数時間経っても解消しない場合は、Azure AI Foundry の「管理センター ＞ クォータ」で対象モデルの利用枠が 0 のまま止まっていないか確認してください。",
+                    "無料試用版や学生向けサブスクリプションなどでは標準クォータが自動付与されない場合があるため、Azure Portal でサブスクリプション種別もご確認ください。"
+                ],
+                "raw": err_str
+            }
+
+        # 2. 認証エラー (401)
+        if "401" in err_str or "unauthorized" in err_lower or "invalid subscription key" in err_lower:
+            return {
+                "kind": "auth",
+                "title": "認証エラー (HTTP 401)",
+                "summary": "Azure OpenAI の APIキーまたはエンドポイントの組み合わせが正しくありません。",
+                "causes": [
+                    "APIキーに入力ミスがある、またはコピー時に文字が欠けている・余分な空白が含まれています。",
+                    "別の Azure リソースの APIキー と エンドポイントURL を組み合わせて入力しています。",
+                    "Azure Portal 上で APIキー が再生成され、古いキーが無効になっています。"
+                ],
+                "actions": [
+                    "Azure Portal / Azure AI Foundry の「キーとエンドポイント」画面を開き、同じリソースの「KEY 1（または KEY 2）」と「エンドポイント」をセットで再コピーしてください。",
+                    "「確認」ボタンで入力したキーの前後に余計な文字がないか確認してください。"
+                ],
+                "raw": err_str
+            }
+
+        # 3. リソース / デプロイ未検出 (404)
+        if "404" in err_str or "deploymentnotfound" in err_lower or "resource not found" in err_lower or "not found" in err_lower:
+            return {
+                "kind": "not_found",
+                "title": "デプロイ名 / URL が見つかりません (HTTP 404)",
+                "summary": f"指定されたデプロイ名「{target_name}」またはエンドポイントURLが存在しません。",
+                "causes": [
+                    f"「デプロイ名」に入力した「{target_name}」という名前のデプロイが Azure 側に存在しません（モデル名そのものではなく、自分で付けた『デプロイ名』を入力する必要があります）。",
+                    "モデルを作成した直後で、デプロイのプロビジョニングがまだ完了していません。",
+                    "エンドポイントURLの形式やリージョン、または APIバージョンが一致していません。"
+                ],
+                "actions": [
+                    "Azure AI Foundry の「デプロイ（Deployments）」画面を開き、デプロイ状態が「成功」になっている「デプロイ名」を正確にコピーして貼り付けてください。",
+                    "「キーとエンドポイント」画面に「Azure OpenAI エンドポイント（https://〜.openai.azure.com/）」が表示されている場合は、そちらのURLをお試しください。",
+                    "モデルをデプロイした直後の場合は、2〜3分待ってから再テストしてください。"
+                ],
+                "raw": err_str
+            }
+
+        # 4. その他のアクセス拒否 (403)
+        if "403" in err_str or "forbidden" in err_lower or "access denied" in err_lower or "virtual network" in err_lower:
+            return {
+                "kind": "forbidden",
+                "title": "アクセス拒否エラー (HTTP 403)",
+                "summary": "Azure リソースへのアクセスが権限設定またはファイアウォールにより拒否されました。",
+                "causes": [
+                    "Azure リソース側のネットワーク設定（IP制限 / プライベートエンドポイント / VNet）により、現在のPCからのアクセスが許可されていません。",
+                    "リソース側で「ローカル認証（APIキーによる認証）」が無効化され、Microsoft Entra ID 認証のみ許可されています。",
+                    "利用中のサブスクリプションが無効化または凍結されています。"
+                ],
+                "actions": [
+                    "Azure Portal で対象リソースの「ネットワーク」設定を開き、接続元のIPアドレスが許可されているか確認してください。",
+                    "対象リソースで APIキー認証（ローカル認証）が有効になっているか管理者に確認してください。"
+                ],
+                "raw": err_str
+            }
+
+        # 5. レート制限 / クォータ超過 (429)
+        if "429" in err_str or "rate limit" in err_lower or "too many requests" in err_lower or "insufficient_quota" in err_lower or "quota" in err_lower:
+            m = re.search(r'(?:retry after|try again in)\s*(\d+)', err_lower)
+            wait_note = f"（約 {m.group(1)} 秒後に再試行するよう案内されています）" if m else ""
+            return {
+                "kind": "rate_limit",
+                "title": "レート制限 / 利用枠超過 (HTTP 429)",
+                "summary": f"Azure OpenAI の利用枠（TPM/RPM）上限に達しました。{wait_note}",
+                "causes": [
+                    "短時間に多くのリクエストを送信したため、デプロイに設定された1分間あたりの上限（TPM/RPM）を超過しました。",
+                    "デプロイのクォータ割り当てが非常に小さい設定になっています。"
+                ],
+                "actions": [
+                    "数十秒〜数分ほど待ってから再度お試しください。",
+                    "設定画面の「RPM」を小さくし、「スレッド（並列数）」を 1〜2 に下げてください。",
+                    "必要に応じて Azure AI Foundry の「デプロイ」設定から割り当てクォータ（TPM）を増やしてください。"
+                ],
+                "raw": err_str
+            }
+
+        # 6. リクエスト・APIバージョン・パラメータエラー (400)
+        if "400" in err_str or "invalid_request_error" in err_lower or "unsupported" in err_lower or "api-version" in err_lower:
+            return {
+                "kind": "bad_request",
+                "title": "設定 / パラメータエラー (HTTP 400)",
+                "summary": "APIバージョンまたはモデルの設定がサーバーに受け付けられませんでした。",
+                "causes": [
+                    "選択した「APIバージョン」が、お使いのモデルやエンドポイントに対応していません。",
+                    "指定したデプロイが画像入力（Vision）やチャット補完形式に対応していないモデルです。"
+                ],
+                "actions": [
+                    "「APIバージョン」を「2024-10-21」または「2024-12-01-preview」「2025-01-01-preview」等に切り替えて再テストしてください。",
+                    "デプロイしているモデルが gpt-4o / gpt-4.1 等のチャット・画像対応モデルか確認してください。"
+                ],
+                "raw": err_str
+            }
+
+        return {
+            "kind": "unknown",
+            "title": "Azure OpenAI 通信エラー",
+            "summary": "Azure OpenAI との通信中に予期しないエラーが発生しました。",
+            "causes": [
+                "エンドポイントURL・APIキー・デプロイ名・APIバージョンのいずれかに誤りがあるか、Azure側で一時的なエラーが発生しています。"
+            ],
+            "actions": [
+                "下の「詳細情報（エラー原文）」の内容を確認し、入力内容（URL・キー・デプロイ名）を見直してください。"
+            ],
+            "raw": err_str
+        }
+
+    # --- Gemini API 用エラー診断 ---
+    if "api_key_invalid" in err_lower or "api key not valid" in err_lower or "invalid api key" in err_lower or ("400" in err_str and "key" in err_lower) or "401" in err_str:
+        return {
+            "kind": "auth",
+            "title": "Gemini APIキーエラー",
+            "summary": "入力された Gemini API キーが正しく認識されませんでした。",
+            "causes": [
+                "APIキーに誤りがある、またはコピー時に前後の文字が欠けている・余分な空白が混入しています。",
+                "Google AI Studio 側でキーが削除または無効化されています。"
+            ],
+            "actions": [
+                "Google AI Studio（https://aistudio.google.com/app/apikey）で発行された APIキー を再度コピーし、右クリック→「貼り付け」で入力してください。"
+            ],
+            "raw": err_str
+        }
+
+    if "403" in err_str or "permission_denied" in err_lower or "permission denied" in err_lower:
+        return {
+            "kind": "forbidden",
+            "title": "アクセス権限エラー (HTTP 403)",
+            "summary": "このAPIキーでは対象モデルまたはAPIへのアクセスが許可されていません。",
+            "causes": [
+                "Google Cloud プロジェクト側で Generative Language API が有効化されていないか、APIキーの制限設定により拒否されています。",
+                "入力したキーが Gemini API 用ではなく、別のGoogleサービスのキーになっています。"
+            ],
+            "actions": [
+                "Google AI Studio で新しいプロジェクトの APIキー を発行してお試しください。"
+            ],
+            "raw": err_str
+        }
+
+    if "404" in err_str or "not found" in err_lower or "is not supported" in err_lower:
+        return {
+            "kind": "not_found",
+            "title": "モデル利用不可 (HTTP 404)",
+            "summary": f"モデル「{target_name}」が存在しないか、現在利用できません。",
+            "causes": [
+                f"選択中のモデル「{target_name}」が廃止されたか、モデルIDの表記が古くなっています。",
+                "お使いのアカウント（無料枠等）ではこのモデルが公開されていません。"
+            ],
+            "actions": [
+                "モデル選択欄の右にある「🌐 更新」ボタンを押して、最新の利用可能なモデル一覧を取得してください。",
+                "「Gemini 3 Flash」や「Gemini 2.5 Flash」などの標準モデルに切り替えて再テストしてください。"
+            ],
+            "raw": err_str
+        }
+
+    if "429" in err_str or "quota" in err_lower or "resource_exhausted" in err_lower:
+        is_zero_limit = ("limit: 0" in err_lower or "limit:0" in err_lower)
+        m = re.search(r'retry in ([\d\.]+)s', err_lower) or re.search(r'seconds:\s*(\d+)', err_lower)
+        if is_zero_limit:
+            return {
+                "kind": "rate_limit",
+                "title": "モデル利用枠なし (HTTP 429)",
+                "summary": f"現在のプランではモデル「{target_name}」の利用枠が 0 に設定されているため利用できません。",
+                "causes": [
+                    f"無料枠（Free Tier）では「{target_name}」が利用対象外になっている、またはプロジェクトのクォータが 0 になっています。"
+                ],
+                "actions": [
+                    "「Gemini 3 Flash」「Gemini 3.1 Flash-Lite Preview」「Gemini 2.5 Flash」等の無料枠対応モデルを選択してください。",
+                    "課金枠（Paid Tier）をご利用の場合は、Google AI Studio で課金設定が有効になっているか確認してください。"
+                ],
+                "raw": err_str
+            }
+        if "per day" in err_lower or "perday" in err_lower:
+            return {
+                "kind": "rate_limit",
+                "title": "1日の利用上限に達しました (HTTP 429)",
+                "summary": "Gemini API の1日あたりの無料利用上限（RPD）に到達しました。",
+                "causes": [
+                    "本日分のAPIリクエスト回数が上限に達したため、日付が変わる（またはリセット時刻になる）まで制限されています。"
+                ],
+                "actions": [
+                    "しばらく時間をおいて（または翌日以降に）再度お試しください。",
+                    "別のモデル（例: Flash-Lite 等）に切り替えるか、課金枠（Paid Tier）のご利用をご検討ください。"
+                ],
+                "raw": err_str
+            }
+        wait_note = f"（約 {int(float(m.group(1)))} 秒後に回復見込み）" if m else ""
+        return {
+            "kind": "rate_limit",
+            "title": "API利用枠超過 (HTTP 429)",
+            "summary": f"短時間にリクエストが集中し、利用制限に達しました。{wait_note}",
+            "causes": [
+                "1分間あたりのリクエスト上限（RPM）またはトークン上限（TPM）を超過しました。",
+                "無料枠のバースト制限に引っかかっています。"
+            ],
+            "actions": [
+                "数十秒ほど待ってから再試行してください。",
+                "「RPM」を 10〜12 以下、「スレッド」を 1 に下げると安定します。"
+            ],
+            "raw": err_str
+        }
+
+    return {
+        "kind": "unknown",
+        "title": "Gemini API 通信エラー",
+        "summary": "Gemini API との通信中に予期しないエラーが発生しました。",
+        "causes": [
+            "APIキーの設定、選択モデル、またはネットワーク環境に問題がある可能性があります。"
+        ],
+        "actions": [
+            "下の「詳細情報（エラー原文）」を確認し、APIキーとモデル設定を見直してください。"
+        ],
+        "raw": err_str
+    }
+
+def format_api_error_message(diag):
+    """diagnose_api_error の結果を読みやすいテキスト形式に整形する"""
+    lines = [diag["summary"], ""]
+    if diag.get("causes"):
+        lines.append("【考えられる原因】")
+        for c in diag["causes"]:
+            lines.append(f"・{c}")
+        lines.append("")
+    if diag.get("actions"):
+        lines.append("【対処方法】")
+        for a in diag["actions"]:
+            lines.append(f"・{a}")
+        lines.append("")
+    lines.append(f"【詳細（エラー原文）】\n{diag.get('raw', '')}")
+    return "\n".join(lines)
+
+def natural_sort_key(s):
+    """ファイル名や文字列内の数字を数値として評価する自然順ソートキー"""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', os.path.basename(str(s)))]
 
 def normalize_text(text):
     """全角英数字と全角カタカナを半角に変換する"""
-    if not isinstance(text, str): return text
-    return jaconv.z2h(text, kana=True, digit=True, ascii=True)
+    if not isinstance(text, str):
+        return text
+    if jaconv is not None:
+        return jaconv.z2h(text, kana=True, digit=True, ascii=True)
+    # jaconv未導入環境向けのフォールバック（全角英数字・記号の半角化）
+    return text.translate(str.maketrans(
+        "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    ))
 
 def sanitize_excel_text(text):
     """Excelに書き込む際にエラーとなる制御文字を除去し、全角・半角正規化を適用する"""
-    if text is None: return ""
+    if text is None:
+        return ""
     text = normalize_text(str(text))
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
 
@@ -183,23 +559,31 @@ def auto_adjust_excel_column_width(ws):
                 if cell.value:
                     for line in str(cell.value).split('\n'):
                         length = sum(2 if ord(c) > 255 else 1 for c in line)
-                        if length > max_length: max_length = length
-            except: pass
+                        if length > max_length:
+                            max_length = length
+            except Exception:
+                pass
         ws.column_dimensions[column_letter].width = min(max_length + 2, 60)
 
 def analyze_column_profile(col_data):
-    if not col_data: return {"pure_num_ratio": 0.0, "fraction_ratio": 0.0, "avg_num_len": 0.0, "is_text": True}
+    if not col_data:
+        return {"pure_num_ratio": 0.0, "fraction_ratio": 0.0, "avg_num_len": 0.0, "is_text": True}
     pure_num_cnt, fraction_cnt, total_num_len, total_cells = 0, 0, 0, 0
     for val in col_data:
         s = str(val).strip()
-        if not s or s == "None": continue
+        if not s or s == "None":
+            continue
         total_cells += 1
         if re.match(r'^\d+/\d+$', s):
-            fraction_cnt += 1; total_num_len += len(s)
+            fraction_cnt += 1
+            total_num_len += len(s)
         else:
             s_clean = s.replace(",", "").replace(".", "", 1).replace("-", "", 1)
-            if s_clean.isdigit(): pure_num_cnt += 1; total_num_len += len(s_clean)
-    if total_cells == 0: return {"pure_num_ratio": 0.0, "fraction_ratio": 0.0, "avg_num_len": 0.0, "is_text": True}
+            if s_clean.isdigit():
+                pure_num_cnt += 1
+                total_num_len += len(s_clean)
+    if total_cells == 0:
+        return {"pure_num_ratio": 0.0, "fraction_ratio": 0.0, "avg_num_len": 0.0, "is_text": True}
     return {
         "pure_num_ratio": pure_num_cnt / total_cells,
         "fraction_ratio": fraction_cnt / total_cells,
@@ -215,47 +599,56 @@ def get_profile_similarity(p1, p2):
     return max(0.0, 1.0 - (diff_pure * 0.4 + diff_frac * 0.4 + diff_len * 0.2))
 
 def parse_row_data(row_data):
-    if isinstance(row_data, list) and len(row_data) == 1: row_data = row_data[0]
+    if isinstance(row_data, list) and len(row_data) == 1:
+        row_data = row_data[0]
     if isinstance(row_data, str):
         row_data = row_data.strip()
         if (row_data.startswith('(') and row_data.endswith(')')) or (row_data.startswith('[') and row_data.endswith(']')):
             try:
                 parsed = ast.literal_eval(row_data)
-                if isinstance(parsed, (list, tuple)): return [str(x) if x is not None else "" for x in parsed]
-            except:
+                if isinstance(parsed, (list, tuple)):
+                    return [str(x) if x is not None else "" for x in parsed]
+            except Exception:
                 return [x.strip().strip("'\"") for x in row_data.strip("()[]").split(",")]
         return [row_data]
-    if isinstance(row_data, tuple): return [str(x) if x is not None else "" for x in row_data]
-    if not isinstance(row_data, list): return [str(row_data)]
+    if isinstance(row_data, tuple):
+        return [str(x) if x is not None else "" for x in row_data]
+    if not isinstance(row_data, list):
+        return [str(row_data)]
     return [str(x) if x is not None else "" for x in row_data]
 
 def apply_text_inheritance(final_aggregated_data):
-    if len(final_aggregated_data) <= 1: return
+    if len(final_aggregated_data) <= 1:
+        return
     def is_text_to_inherit(text):
         s = str(text).strip()
-        if not s or s in ["〃", "”", "\"", "''", "””", "''", "同上", "...", "…"]: return False
+        if not s or s in ["〃", "”", "\"", "''", "””", "''", "同上", "...", "…"]:
+            return False
         return bool(re.search(r'[a-zA-Zａ-ｚＡ-Ｚぁ-んァ-ン一-龥0-9０-９]', s))
     header = final_aggregated_data[0]
     skip_cols = {idx for idx, h in enumerate(header) if "備考" in str(h)}
     for col_idx in range(1, len(header)):
-        if col_idx in skip_cols: continue
+        if col_idx in skip_cols:
+            continue
         last_text = ""
         for row_idx in range(1, len(final_aggregated_data)):
             cell_val = str(final_aggregated_data[row_idx][col_idx]).strip()
-            
+
             if cell_val == "None":
                 cell_val = ""
                 final_aggregated_data[row_idx][col_idx] = ""
-                
+
             if cell_val in ["〃", "”", "\"", "''", "””", "''", "同上", "...", "…"]:
-                if last_text: final_aggregated_data[row_idx][col_idx] = last_text
+                if last_text:
+                    final_aggregated_data[row_idx][col_idx] = last_text
             elif cell_val == "":
                 pass
             else:
                 last_text = cell_val if is_text_to_inherit(cell_val) else ""
 
 def merge_2d_arrays_horizontally(arrays_list):
-    if not arrays_list: return []
+    if not arrays_list:
+        return []
     max_rows = max((len(arr) for arr in arrays_list), default=0)
     if max_rows == 0:
         max_rows = 1
@@ -270,7 +663,8 @@ def merge_2d_arrays_horizontally(arrays_list):
                 row_data = list(arr[r])
                 row_data += [""] * (max_c - len(row_data))
                 merged_row.extend(row_data)
-            else: merged_row.extend([""] * max_c)
+            else:
+                merged_row.extend([""] * max_c)
         merged.append(merged_row)
     return merged
 
@@ -289,23 +683,24 @@ class SharedState:
         self.cancelled = False
         self.saved_custom_prompts = []
         self.loaded_preset_name = "未読込"
-        
+
         # 外部から更新が必要なUIウィジェットへの参照
         self.path_label = None
         self.save_label = None
         self.btn_select_crop = None
         self.btn_api_settings = None
-        self.plan_indicator = None # プラン表示用
+        self.plan_indicator = None
         self.status_label = None
         self.preset_filename_label = None
 
-        # Tkinter Variables
+        # Tkinter Variables (共通設定)
         self.rotate_option = None
         self.save_option = None
         self.engine_var = None
         self.output_format_var = None
-        self.extract_mode_var = None # 抽出モード管理用変数を追加
-        
+        self.extract_mode_var = None
+
+        # Gemini API 設定用 Variables
         self.api_plan_var = None
         self.api_key_free_var = None
         self.api_key_paid_var = None
@@ -313,7 +708,7 @@ class SharedState:
         self.gemini_model_paid_var = None
         self.api_rpm_free_var = None
         self.api_rpm_paid_var = None
-        
+
         self.temperature_free_var = None
         self.temperature_paid_var = None
         self.safety_free_var = None
@@ -324,6 +719,17 @@ class SharedState:
         self.custom_prompt_paid_var = None
         self.threads_free_var = None
         self.threads_paid_var = None
+
+        # Azure OpenAI Service 設定用 Variables
+        self.azure_api_key_var = None
+        self.azure_endpoint_var = None
+        self.azure_deployment_var = None
+        self.azure_api_version_var = None
+        self.azure_rpm_var = None
+        self.azure_temperature_var = None
+        self.azure_max_tokens_var = None
+        self.azure_custom_prompt_var = None
+        self.azure_threads_var = None
 
 # グローバルな状態インスタンス
 state = SharedState()

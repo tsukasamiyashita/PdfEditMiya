@@ -8,7 +8,7 @@ ezdxf
 pytesseract
 Pillow
 google-generativeai>=0.5.4
+openai>=1.0.0
 python-docx
 xlrd
-customtkinter
 jaconv
