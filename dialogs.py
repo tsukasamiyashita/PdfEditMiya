@@ -13,7 +13,9 @@ import google.generativeai as genai
 from common import *
 from gemini_engine import (
     test_azure_connection, fetch_gemini_models, fetch_azure_models,
-    filter_mainstream_gemini_models, filter_mainstream_azure_models
+    fetch_azure_models_with_meta,
+    filter_mainstream_gemini_models, filter_mainstream_azure_models,
+    get_recommended_gemini_settings, get_recommended_azure_settings
 )
 
 MODELS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_models.json")
@@ -164,6 +166,70 @@ def show_text_context_menu(event, text_widget):
     menu.add_command(label="貼り付け", command=lambda: text_widget.event_generate("<<Paste>>"))
     menu.post(event.x_root, event.y_root)
 
+def center_window(win, parent, w, h):
+    """ウィンドウを親ウィンドウの中央かつ画面内に収まる位置へ配置する"""
+    try:
+        screen_w = win.winfo_screenwidth()
+        screen_h = win.winfo_screenheight()
+        pw = parent.winfo_width() if parent and parent.winfo_width() > 100 else WINDOW_WIDTH
+        ph = parent.winfo_height() if parent and parent.winfo_height() > 100 else WINDOW_HEIGHT
+        px = parent.winfo_rootx() if parent else 0
+        py = parent.winfo_rooty() if parent else 0
+        raw_x = px + (pw // 2) - (w // 2)
+        raw_y = py + (ph // 2) - (h // 2)
+        x = max(10, min(raw_x, screen_w - w - 10))
+        y = max(10, min(raw_y, screen_h - h - 40))
+        win.geometry(f"{w}x{h}+{x}+{y}")
+    except Exception:
+        win.geometry(f"{w}x{h}")
+
+def show_runtime_error_dialog(parent, task_name, err_msg):
+    """処理実行中のエラーをスクロール・コピー可能な見やすいダイアログで表示する"""
+    err_win = tk.Toplevel(parent)
+    err_win.title(f"実行エラー - {task_name}")
+    screen_w = err_win.winfo_screenwidth()
+    screen_h = err_win.winfo_screenheight()
+    win_w = min(620, screen_w - 40)
+    win_h = min(460, screen_h - 80)
+    err_win.configure(bg=BG_COLOR)
+    center_window(err_win, parent, win_w, win_h)
+    err_win.grab_set()
+
+    banner = tk.Frame(err_win, bg=CARD_BG, padx=16, pady=12, highlightbackground=BORDER_COLOR, highlightthickness=1)
+    banner.pack(fill=tk.X, side=tk.TOP)
+    tk.Label(
+        banner, text=" ❌ 実行エラーが発生しました ",
+        font=("Segoe UI", 10, "bold"), bg="#F8D7DA", fg="#842029", padx=8, pady=3
+    ).pack(anchor="w")
+    tk.Label(
+        banner, text=f"「{task_name}」の処理中にエラーが発生したため停止しました。",
+        font=("Meiryo UI", 9, "bold"), bg=CARD_BG, fg=TEXT_COLOR, justify="left", anchor="w", wraplength=win_w - 48
+    ).pack(fill=tk.X, pady=(6, 0))
+
+    btn_bar = tk.Frame(err_win, bg=BG_COLOR, padx=16, pady=10)
+    btn_bar.pack(fill=tk.X, side=tk.BOTTOM)
+
+    def _copy_err():
+        try:
+            err_win.clipboard_clear()
+            err_win.clipboard_append(f"[{task_name} エラー]\n{err_msg}")
+            btn_cp.config(text="✅ コピーしました")
+            err_win.after(2000, lambda: btn_cp.winfo_exists() and btn_cp.config(text="📋 エラー内容をコピー"))
+        except Exception:
+            pass
+
+    btn_cp = ttk.Button(btn_bar, text="📋 エラー内容をコピー", command=_copy_err)
+    btn_cp.pack(side=tk.LEFT)
+    ttk.Button(btn_bar, text="OK", command=err_win.destroy, style="Primary.TButton", width=14).pack(side=tk.RIGHT)
+
+    body = tk.Frame(err_win, bg=BG_COLOR, padx=14, pady=8)
+    body.pack(fill=tk.BOTH, expand=True)
+    tk.Label(body, text="▼ 詳細内容", font=("Segoe UI", 9, "bold"), bg=BG_COLOR, fg=MUTED_TEXT, anchor="w").pack(fill=tk.X, pady=(0, 4))
+    box = st.ScrolledText(body, wrap=tk.WORD, font=("Meiryo UI", 9), bg=CARD_BG, fg=TEXT_COLOR, relief=tk.SOLID, borderwidth=1, padx=12, pady=10)
+    box.pack(fill=tk.BOTH, expand=True)
+    box.insert(tk.END, err_msg)
+    box.configure(state=tk.DISABLED)
+
 def show_api_error_dialog(parent, diag):
     """
     diagnose_api_error() の診断結果を、原因・対処法・エラー原文に分けて
@@ -175,15 +241,9 @@ def show_api_error_dialog(parent, diag):
     screen_h = err_win.winfo_screenheight()
     win_w = min(640, screen_w - 40)
     win_h = min(540, screen_h - 80)
-    err_win.geometry(f"{win_w}x{win_h}")
     err_win.configure(bg=BG_COLOR)
+    center_window(err_win, parent, win_w, win_h)
     err_win.grab_set()
-
-    raw_x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (win_w // 2)
-    raw_y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (win_h // 2)
-    x = max(10, min(raw_x, screen_w - win_w - 10))
-    y = max(10, min(raw_y, screen_h - win_h - 40))
-    err_win.geometry(f"+{x}+{y}")
 
     kind = diag.get("kind", "unknown")
     is_wait_type = kind in ["init_quota", "rate_limit"]
@@ -271,17 +331,9 @@ def open_api_settings_dialog():
 
     dialog_w = min(1200, screen_w - 40)
     dialog_h = min(800, screen_h - 80)
-    dialog.geometry(f"{dialog_w}x{dialog_h}")
     dialog.configure(bg=BG_COLOR)
+    center_window(dialog, state.root, dialog_w, dialog_h)
     dialog.grab_set()
-
-    raw_x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - (dialog_w // 2)
-    raw_y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (dialog_h // 2)
-
-    x = max(10, min(raw_x, screen_w - dialog_w - 10))
-    y = max(10, min(raw_y, screen_h - dialog_h - 40))
-
-    dialog.geometry(f"+{x}+{y}")
 
     fav_lists = []
     models = load_models_list()
@@ -308,28 +360,47 @@ def open_api_settings_dialog():
             f_list.set_items(state.saved_custom_prompts)
 
     original_values = {
+        "engine": state.engine_var.get(),
         "plan": state.api_plan_var.get(),
         "key_free": state.api_key_free_var.get(), "key_paid": state.api_key_paid_var.get(),
         "model_free": state.gemini_model_free_var.get(), "model_paid": state.gemini_model_paid_var.get(),
-        "rpm_free": state.api_rpm_free_var.get(), "rpm_paid": state.api_rpm_paid_var.get(),
-        "temp_free": state.temperature_free_var.get(), "temp_paid": state.temperature_paid_var.get(),
+        "rpm_free": safe_int_var(state.api_rpm_free_var, 12, 1, 2000),
+        "rpm_paid": safe_int_var(state.api_rpm_paid_var, 300, 1, 2000),
+        "temp_free": safe_float_var(state.temperature_free_var, 0.0, 0.0, 2.0),
+        "temp_paid": safe_float_var(state.temperature_paid_var, 0.0, 0.0, 2.0),
         "safety_free": state.safety_free_var.get(), "safety_paid": state.safety_paid_var.get(),
-        "tokens_free": state.max_tokens_free_var.get(), "tokens_paid": state.max_tokens_paid_var.get(),
+        "tokens_free": safe_int_var(state.max_tokens_free_var, 8192, 1024, 2097152),
+        "tokens_paid": safe_int_var(state.max_tokens_paid_var, 8192, 1024, 2097152),
         "prompt_free": state.custom_prompt_free_var.get(), "prompt_paid": state.custom_prompt_paid_var.get(),
-        "threads_free": state.threads_free_var.get(), "threads_paid": state.threads_paid_var.get(),
+        "threads_free": safe_int_var(state.threads_free_var, 1, 1, 20),
+        "threads_paid": safe_int_var(state.threads_paid_var, 5, 1, 20),
         "azure_key": state.azure_api_key_var.get(),
         "azure_endpoint": state.azure_endpoint_var.get(),
         "azure_deployment": state.azure_deployment_var.get(),
         "azure_api_version": state.azure_api_version_var.get(),
-        "azure_rpm": state.azure_rpm_var.get(),
-        "azure_temp": state.azure_temperature_var.get(),
-        "azure_tokens": state.azure_max_tokens_var.get(),
+        "azure_rpm": safe_int_var(state.azure_rpm_var, 60, 1, 2000),
+        "azure_temp": safe_float_var(state.azure_temperature_var, 0.0, 0.0, 2.0),
+        "azure_tokens": safe_int_var(state.azure_max_tokens_var, 4096, 1024, 128000),
         "azure_prompt": state.azure_custom_prompt_var.get(),
-        "azure_threads": state.azure_threads_var.get(),
+        "azure_threads": safe_int_var(state.azure_threads_var, 3, 1, 20),
         "saved_prompts": list(state.saved_custom_prompts)
     }
 
     def apply_and_close():
+        # 数値Spinboxが空欄・範囲外だった場合は安全な値へ補正
+        state.api_rpm_free_var.set(safe_int_var(state.api_rpm_free_var, 12, 1, 2000))
+        state.api_rpm_paid_var.set(safe_int_var(state.api_rpm_paid_var, 300, 1, 2000))
+        state.temperature_free_var.set(safe_float_var(state.temperature_free_var, 0.0, 0.0, 2.0))
+        state.temperature_paid_var.set(safe_float_var(state.temperature_paid_var, 0.0, 0.0, 2.0))
+        state.max_tokens_free_var.set(safe_int_var(state.max_tokens_free_var, 8192, 1024, 2097152))
+        state.max_tokens_paid_var.set(safe_int_var(state.max_tokens_paid_var, 8192, 1024, 2097152))
+        state.threads_free_var.set(safe_int_var(state.threads_free_var, 1, 1, 20))
+        state.threads_paid_var.set(safe_int_var(state.threads_paid_var, 5, 1, 20))
+        state.azure_rpm_var.set(safe_int_var(state.azure_rpm_var, 60, 1, 2000))
+        state.azure_temperature_var.set(safe_float_var(state.azure_temperature_var, 0.0, 0.0, 2.0))
+        state.azure_max_tokens_var.set(safe_int_var(state.azure_max_tokens_var, 4096, 1024, 128000))
+        state.azure_threads_var.set(safe_int_var(state.azure_threads_var, 3, 1, 20))
+
         # Azure エンドポイントがフルURLで入力されていた場合は正規化・補完
         raw_ep = state.azure_endpoint_var.get().strip()
         if raw_ep:
@@ -345,44 +416,55 @@ def open_api_settings_dialog():
                 state.azure_api_version_var.set(ver)
 
         if state.plan_indicator:
-            if state.engine_var.get() == "AzureOpenAI":
+            engine = state.engine_var.get()
+            if engine == "AzureOpenAI":
                 dep_name = state.azure_deployment_var.get().strip() or "未設定"
-                state.plan_indicator.config(text=f"🔷 Azure OpenAI ({dep_name})", foreground=PRIMARY)
-            else:
+                state.plan_indicator.config(text=f"🔷 Azure OpenAI / {dep_name}", foreground=PRIMARY)
+            elif engine == "Gemini":
                 plan = state.api_plan_var.get()
+                m_name = state.gemini_model_free_var.get() if plan == "free" else state.gemini_model_paid_var.get()
                 if plan == "free":
-                    state.plan_indicator.config(text="🟢 無料枠 (Free)", foreground=COLOR_SUCCESS)
+                    state.plan_indicator.config(text=f"🟢 無料枠 (Free) / {m_name}", foreground=COLOR_SUCCESS)
                 else:
-                    state.plan_indicator.config(text="🔵 課金枠 (Paid)", foreground=PRIMARY)
+                    state.plan_indicator.config(text=f"🔵 課金枠 (Paid) / {m_name}", foreground=PRIMARY)
+
+        # 設定ファイルへも自動保存し、次回起動時に失われないようにする
+        if state.save_settings_callback:
+            try:
+                state.save_settings_callback()
+            except Exception:
+                pass
+
         dialog.destroy()
 
     def has_changes():
+        if state.engine_var.get() != original_values["engine"]: return True
         if state.api_plan_var.get() != original_values["plan"]: return True
         if state.api_key_free_var.get() != original_values["key_free"]: return True
         if state.api_key_paid_var.get() != original_values["key_paid"]: return True
         if state.gemini_model_free_var.get() != original_values["model_free"]: return True
         if state.gemini_model_paid_var.get() != original_values["model_paid"]: return True
-        if state.api_rpm_free_var.get() != original_values["rpm_free"]: return True
-        if state.api_rpm_paid_var.get() != original_values["rpm_paid"]: return True
-        if state.temperature_free_var.get() != original_values["temp_free"]: return True
-        if state.temperature_paid_var.get() != original_values["temp_paid"]: return True
+        if safe_int_var(state.api_rpm_free_var, original_values["rpm_free"]) != original_values["rpm_free"]: return True
+        if safe_int_var(state.api_rpm_paid_var, original_values["rpm_paid"]) != original_values["rpm_paid"]: return True
+        if safe_float_var(state.temperature_free_var, original_values["temp_free"]) != original_values["temp_free"]: return True
+        if safe_float_var(state.temperature_paid_var, original_values["temp_paid"]) != original_values["temp_paid"]: return True
         if state.safety_free_var.get() != original_values["safety_free"]: return True
         if state.safety_paid_var.get() != original_values["safety_paid"]: return True
-        if state.max_tokens_free_var.get() != original_values["tokens_free"]: return True
-        if state.max_tokens_paid_var.get() != original_values["tokens_paid"]: return True
+        if safe_int_var(state.max_tokens_free_var, original_values["tokens_free"]) != original_values["tokens_free"]: return True
+        if safe_int_var(state.max_tokens_paid_var, original_values["tokens_paid"]) != original_values["tokens_paid"]: return True
         if state.custom_prompt_free_var.get() != original_values["prompt_free"]: return True
         if state.custom_prompt_paid_var.get() != original_values["prompt_paid"]: return True
-        if state.threads_free_var.get() != original_values["threads_free"]: return True
-        if state.threads_paid_var.get() != original_values["threads_paid"]: return True
+        if safe_int_var(state.threads_free_var, original_values["threads_free"]) != original_values["threads_free"]: return True
+        if safe_int_var(state.threads_paid_var, original_values["threads_paid"]) != original_values["threads_paid"]: return True
         if state.azure_api_key_var.get() != original_values["azure_key"]: return True
         if state.azure_endpoint_var.get() != original_values["azure_endpoint"]: return True
         if state.azure_deployment_var.get() != original_values["azure_deployment"]: return True
         if state.azure_api_version_var.get() != original_values["azure_api_version"]: return True
-        if state.azure_rpm_var.get() != original_values["azure_rpm"]: return True
-        if state.azure_temperature_var.get() != original_values["azure_temp"]: return True
-        if state.azure_max_tokens_var.get() != original_values["azure_tokens"]: return True
+        if safe_int_var(state.azure_rpm_var, original_values["azure_rpm"]) != original_values["azure_rpm"]: return True
+        if safe_float_var(state.azure_temperature_var, original_values["azure_temp"]) != original_values["azure_temp"]: return True
+        if safe_int_var(state.azure_max_tokens_var, original_values["azure_tokens"]) != original_values["azure_tokens"]: return True
         if state.azure_custom_prompt_var.get() != original_values["azure_prompt"]: return True
-        if state.azure_threads_var.get() != original_values["azure_threads"]: return True
+        if safe_int_var(state.azure_threads_var, original_values["azure_threads"]) != original_values["azure_threads"]: return True
         if state.saved_custom_prompts != original_values["saved_prompts"]: return True
         return False
 
@@ -391,6 +473,7 @@ def open_api_settings_dialog():
             if not messagebox.askyesno("確認", "変更が適用されていません。\n破棄して設定画面を閉じますか？", parent=dialog):
                 return
 
+        state.engine_var.set(original_values["engine"])
         state.api_plan_var.set(original_values["plan"])
         state.api_key_free_var.set(original_values["key_free"])
         state.api_key_paid_var.set(original_values["key_paid"])
@@ -432,8 +515,22 @@ def open_api_settings_dialog():
     btn_cancel = ttk.Button(btn_action_frame, text="キャンセル", command=cancel_and_close, width=15)
     btn_cancel.pack(side=tk.LEFT, padx=10)
 
-    btn_apply = ttk.Button(btn_action_frame, text="設定を適用して閉じる", command=apply_and_close, style="Primary.TButton", width=25)
+    btn_apply = ttk.Button(btn_action_frame, text="設定を適用して保存・閉じる", command=apply_and_close, style="Primary.TButton", width=26)
     btn_apply.pack(side=tk.LEFT, padx=10)
+    ttk.Label(btn_action_frame, text="※適用すると設定ファイルへ自動保存されます", background=BG_COLOR, foreground=MUTED_TEXT, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(6, 0))
+
+    tab_reset_handlers = {}
+    def reset_current_tab_all():
+        try:
+            current_tab = notebook.select()
+            handler = tab_reset_handlers.get(current_tab)
+            if handler:
+                handler()
+        except Exception:
+            pass
+
+    btn_reset_tab_all = ttk.Button(btn_action_frame, text="🔄 このタブを推奨値に戻す", command=reset_current_tab_all)
+    btn_reset_tab_all.pack(side=tk.RIGHT, padx=15)
 
     container = ttk.Frame(dialog, style="Main.TFrame")
     container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -462,17 +559,30 @@ def open_api_settings_dialog():
     lbl_title = ttk.Label(scrollable_frame, text="AI エンジン詳細設定 (Gemini API / Azure OpenAI Service)", font=("Segoe UI", 16, "bold"), background=BG_COLOR, foreground=PRIMARY)
     lbl_title.pack(pady=(10, 5))
 
-    plan_frame = ttk.LabelFrame(scrollable_frame, text=" Gemini API 実行プランの選択 ", style="Card.TLabelframe", padding=8)
+    plan_frame = ttk.LabelFrame(scrollable_frame, text=" 実際に使用するAIエンジン / プランの選択 ", style="Card.TLabelframe", padding=8)
     plan_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
 
     plan_inner = ttk.Frame(plan_frame, style="Card.TFrame")
     plan_inner.pack(anchor="w", padx=5, pady=2)
 
-    ttk.Label(plan_inner, text="Gemini API 使用時に適用するプランを選んでください（下のタブとは連動しません）:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 15))
-    rb_free = ttk.Radiobutton(plan_inner, text="無料枠 (Free Tier)", variable=state.api_plan_var, value="free")
-    rb_free.pack(side=tk.LEFT, padx=(0, 15))
-    rb_paid = ttk.Radiobutton(plan_inner, text="課金枠 (Paid Tier)", variable=state.api_plan_var, value="paid")
-    rb_paid.pack(side=tk.LEFT)
+    initial_profile = "azure" if state.engine_var.get() == "AzureOpenAI" else ("gemini_paid" if state.api_plan_var.get() == "paid" else "gemini_free")
+    active_ai_profile_var = tk.StringVar(value=initial_profile)
+
+    def on_profile_change():
+        prof = active_ai_profile_var.get()
+        if prof == "azure":
+            state.engine_var.set("AzureOpenAI")
+        elif prof == "gemini_paid":
+            state.engine_var.set("Gemini")
+            state.api_plan_var.set("paid")
+        else:
+            state.engine_var.set("Gemini")
+            state.api_plan_var.set("free")
+
+    ttk.Label(plan_inner, text="抽出時に使用するAI設定を選んでください（下のタブとは連動しません）:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 12))
+    ttk.Radiobutton(plan_inner, text="Gemini API (無料枠)", variable=active_ai_profile_var, value="gemini_free", command=on_profile_change).pack(side=tk.LEFT, padx=(0, 10))
+    ttk.Radiobutton(plan_inner, text="Gemini API (課金枠)", variable=active_ai_profile_var, value="gemini_paid", command=on_profile_change).pack(side=tk.LEFT, padx=(0, 10))
+    ttk.Radiobutton(plan_inner, text="Azure OpenAI Service", variable=active_ai_profile_var, value="azure", command=on_profile_change).pack(side=tk.LEFT)
 
     notebook = ttk.Notebook(scrollable_frame)
     notebook.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
@@ -480,9 +590,9 @@ def open_api_settings_dialog():
     tab_free = ttk.Frame(notebook, style="Main.TFrame")
     tab_paid = ttk.Frame(notebook, style="Main.TFrame")
     tab_azure = ttk.Frame(notebook, style="Main.TFrame")
-    notebook.add(tab_free, text=" 🟢 Gemini 無料枠 (Free Tier) の設定 ")
-    notebook.add(tab_paid, text=" 🔵 Gemini 課金枠 (Paid Tier) の設定 ")
-    notebook.add(tab_azure, text=" 🔷 Azure OpenAI Service の設定 ")
+    notebook.add(tab_free, text="  Gemini 無料枠 (Free)  ")
+    notebook.add(tab_paid, text="  Gemini 課金枠 (Paid)  ")
+    notebook.add(tab_azure, text="  Azure OpenAI Service  ")
 
     def build_prompt_section(parent_tab, prompt_var):
         """カスタムプロンプト設定セクション（Gemini / Azure OpenAI 共通）"""
@@ -603,8 +713,8 @@ def open_api_settings_dialog():
 
         ttk.Label(key_inner, text=f"{plan_type.capitalize()} 用のAPIキー:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
 
-        entry_key = ttk.Entry(key_inner, textvariable=key_var, width=70, show="*")
-        entry_key.pack(side=tk.LEFT, padx=(0, 5))
+        entry_key = ttk.Entry(key_inner, textvariable=key_var, width=50, show="*")
+        entry_key.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         entry_key.bind("<Button-3>", lambda e, widget=entry_key: show_context_menu(e, widget))
 
         btn_toggle = ttk.Button(key_inner, text="確認", width=6)
@@ -666,7 +776,7 @@ def open_api_settings_dialog():
         if not model_combo.get():
             model_combo.set(current_val)
 
-        def on_model_select(event=None, cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
+        def on_model_select(event=None, cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, tok_var=tokens_var, is_f=is_free):
             selected_display = cb.get()
             matched = False
             for m in models:
@@ -677,27 +787,16 @@ def open_api_settings_dialog():
             if not matched:
                 m_var.set(selected_display)
 
-            model_id = m_var.get().lower()
-            if "pro" in model_id:
-                if is_f:
-                    r_var.set(1)
-                    t_var.set(1)
-                else:
-                    r_var.set(150)
-                    t_var.set(5)
-            else:
-                if is_f:
-                    r_var.set(12)
-                    t_var.set(1)
-                else:
-                    r_var.set(300)
-                    t_var.set(5)
+            rec = get_recommended_gemini_settings(m_var.get(), is_f)
+            r_var.set(rec["rpm"])
+            t_var.set(rec["threads"])
+            tok_var.set(rec["max_tokens"])
 
         model_combo.bind("<<ComboboxSelected>>", on_model_select)
         model_combo.bind("<FocusOut>", on_model_select)
         model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        def fetch_models(k_var=key_var):
+        def fetch_models(k_var=key_var, m_var=model_var, r_var=rpm_var, t_var=threads_var, tp_var=temp_var, tok_var=tokens_var, s_var=safety_var, is_f=is_free):
             key = k_var.get().strip()
             if not key:
                 messagebox.showwarning("警告", "最新モデルを取得するには、APIキーを入力してください。", parent=dialog)
@@ -723,7 +822,45 @@ def open_api_settings_dialog():
 
                     vis_cnt = len(get_visible_gemini_models())
                     mode_note = f"（主力モデル {vis_cnt}件 を表示中。すべて見る場合は「主力モデルのみ表示」のチェックを外してください）" if gemini_mainstream_only_var.get() else f"（全 {vis_cnt}件 を表示中）"
-                    messagebox.showinfo("更新完了", f"最新のモデルリスト (全{len(models)}件) を Gemini API から取得しました！\n{mode_note}", parent=dialog)
+
+                    # 現在選択中モデルの推奨設定を確認
+                    rec = get_recommended_gemini_settings(m_var.get(), is_f)
+                    diffs = []
+                    cur_rpm = safe_int_var(r_var, rec["rpm"])
+                    cur_th = safe_int_var(t_var, rec["threads"])
+                    cur_tp = safe_float_var(tp_var, rec["temperature"])
+                    cur_tok = safe_int_var(tok_var, rec["max_tokens"])
+                    if cur_rpm != rec["rpm"]:
+                        diffs.append(f"・RPM: {cur_rpm} → {rec['rpm']}")
+                    if cur_th != rec["threads"]:
+                        diffs.append(f"・スレッド: {cur_th} → {rec['threads']}")
+                    if abs(cur_tp - rec["temperature"]) > 1e-6:
+                        diffs.append(f"・Temp: {cur_tp} → {rec['temperature']}")
+                    if cur_tok != rec["max_tokens"]:
+                        diffs.append(f"・最大トークン: {cur_tok} → {rec['max_tokens']}")
+
+                    if diffs:
+                        ask_msg = (
+                            f"最新のモデルリスト (全{len(models)}件) を Gemini API から取得しました！\n"
+                            f"{mode_note}\n\n"
+                            f"【現在のモデル（{m_var.get()}）の推奨設定を確認しました】\n"
+                            + "\n".join(diffs)
+                            + "\n\nこれらの推奨値を適用しますか？"
+                        )
+                        if messagebox.askyesno("更新完了・推奨値の確認", ask_msg, parent=dialog):
+                            r_var.set(rec["rpm"])
+                            t_var.set(rec["threads"])
+                            tp_var.set(rec["temperature"])
+                            tok_var.set(rec["max_tokens"])
+                            s_var.set(rec["disable_safety"])
+                    else:
+                        messagebox.showinfo(
+                            "更新完了",
+                            f"最新のモデルリスト (全{len(models)}件) を Gemini API から取得しました！\n"
+                            f"{mode_note}\n\n"
+                            f"✅ 現在の設定（RPM / スレッド / パラメータ）は推奨値と一致しています。",
+                            parent=dialog
+                        )
                 else:
                     messagebox.showinfo("情報", "取得可能なモデルが見つかりませんでした。", parent=dialog)
             except Exception as e:
@@ -811,7 +948,7 @@ def open_api_settings_dialog():
             headers_plan = ["比較項目", "無料枠 (Free Tier)", "課金枠 (Paid Tier)"]
             data_plan = [
                 ["利用料金", "完全無料（クレジットカード登録不要）", "従量課金（トークンと呼ばれるデータ量に応じて支払い）"],
-                ["利用できるモデル", "3 Flash, 3.1 Flash-Lite, 2.5 Pro など", "すべてのモデル（3.1 Pro Previewなども利用可）"],
+                ["利用できるモデル", "Gemini 4 Hydrogen / 3.8 Flash / 3.5 Flash-Lite など", "すべての最新モデル（Gemini 4 Carbon / Neon / Argon 含む）"],
                 ["データの\nプライバシー", "入力データがGoogleのAI学習に利用される可能性がある", "入力データはAI学習に利用されない"]
             ]
             create_table(sf_info, headers_plan, data_plan, [150, 360, 360])
@@ -883,12 +1020,9 @@ def open_api_settings_dialog():
                 if m[1] == target_model_val:
                     cb.set(m[0])
                     break
-            if is_f:
-                r_var.set(12)
-                t_var.set(1)
-            else:
-                r_var.set(300)
-                t_var.set(5)
+            rec = get_recommended_gemini_settings(target_model_val, is_f)
+            r_var.set(rec["rpm"])
+            t_var.set(rec["threads"])
 
         btn_reset_perf = ttk.Button(perf_action_inner, text="🔄 推奨値", command=lambda cb=model_combo, m=model_var, r=rpm_var, t=threads_var, f=is_free: reset_perf(cb, m, r, t, f))
         btn_reset_perf.pack(side=tk.RIGHT)
@@ -912,13 +1046,21 @@ def open_api_settings_dialog():
         chk_safety = ttk.Checkbutton(param_row2, text="安全フィルタ無効化 (エラー回避)", variable=safety_var, style="TCheckbutton")
         chk_safety.pack(side=tk.LEFT)
 
-        def reset_param(t_var=temp_var, tok_var=tokens_var, s_var=safety_var):
-            t_var.set(0.0)
-            tok_var.set(8192)
-            s_var.set(True)
+        def reset_param(t_var=temp_var, tok_var=tokens_var, s_var=safety_var, m_var=model_var, is_f=is_free):
+            rec = get_recommended_gemini_settings(m_var.get(), is_f)
+            t_var.set(rec["temperature"])
+            tok_var.set(rec["max_tokens"])
+            s_var.set(rec["disable_safety"])
 
         btn_reset_param = ttk.Button(param_row2, text="🔄 推奨値", command=reset_param)
         btn_reset_param.pack(side=tk.RIGHT, pady=(10, 0))
+
+        def _reset_gemini_tab_all(cb=model_combo, m=model_var, r=rpm_var, th=threads_var, tp=temp_var, tok=tokens_var, sf=safety_var, f=is_free):
+            reset_perf(cb, m, r, th, f)
+            reset_param(tp, tok, sf, m, f)
+            messagebox.showinfo("推奨値に戻しました", "モデル・RPM・スレッド・パラメータ設定をすべて推奨値に戻しました。", parent=dialog)
+
+        tab_reset_handlers[str(parent_tab)] = _reset_gemini_tab_all
 
         build_prompt_section(parent_tab, prompt_var)
 
@@ -930,16 +1072,16 @@ def open_api_settings_dialog():
         row_ep = ttk.Frame(conn_frame, style="Card.TFrame")
         row_ep.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(row_ep, text="エンドポイントURL:", width=16, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
-        entry_ep = ttk.Entry(row_ep, textvariable=state.azure_endpoint_var, width=60)
-        entry_ep.pack(side=tk.LEFT, padx=(0, 8))
+        entry_ep = ttk.Entry(row_ep, textvariable=state.azure_endpoint_var, width=48)
+        entry_ep.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         entry_ep.bind("<Button-3>", lambda e, widget=entry_ep: show_context_menu(e, widget))
         ttk.Label(row_ep, text="例: https://your-resource.openai.azure.com/", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8)).pack(side=tk.LEFT)
 
         row_key = ttk.Frame(conn_frame, style="Card.TFrame")
         row_key.pack(fill=tk.X, pady=(0, 4))
         ttk.Label(row_key, text="APIキー:", width=16, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
-        entry_az_key = ttk.Entry(row_key, textvariable=state.azure_api_key_var, width=60, show="*")
-        entry_az_key.pack(side=tk.LEFT, padx=(0, 5))
+        entry_az_key = ttk.Entry(row_key, textvariable=state.azure_api_key_var, width=48, show="*")
+        entry_az_key.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         entry_az_key.bind("<Button-3>", lambda e, widget=entry_az_key: show_context_menu(e, widget))
 
         btn_toggle_az = ttk.Button(row_key, text="確認", width=6)
@@ -959,6 +1101,7 @@ def open_api_settings_dialog():
         ttk.Label(row_dep, text="デプロイ名:", width=16, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         azure_models_all = load_azure_models_list()
         azure_mainstream_only_var = tk.BooleanVar(value=True)
+        detected_az_api_ver = {"value": DEFAULT_AZURE_API_VERSION}
 
         def get_visible_azure_models():
             if azure_mainstream_only_var.get():
@@ -968,6 +1111,14 @@ def open_api_settings_dialog():
         combo_dep = ttk.Combobox(row_dep, textvariable=state.azure_deployment_var, values=get_visible_azure_models(), width=26)
         combo_dep.pack(side=tk.LEFT, padx=(0, 5))
         combo_dep.bind("<Button-3>", lambda e, widget=combo_dep: show_context_menu(e, widget))
+
+        def on_azure_dep_select(event=None):
+            rec = get_recommended_azure_settings(state.azure_deployment_var.get(), detected_az_api_ver["value"])
+            state.azure_rpm_var.set(rec["rpm"])
+            state.azure_threads_var.set(rec["threads"])
+            state.azure_max_tokens_var.set(rec["max_tokens"])
+
+        combo_dep.bind("<<ComboboxSelected>>", on_azure_dep_select)
 
         def refresh_azure_combo():
             visible = get_visible_azure_models()
@@ -997,7 +1148,8 @@ def open_api_settings_dialog():
                 btn_fetch_az_models.config(text="取得中...", state=tk.DISABLED)
                 dialog.update()
 
-                new_az_models = fetch_azure_models(key, base_ep, resolved_ver)
+                new_az_models, best_ver = fetch_azure_models_with_meta(key, base_ep, resolved_ver)
+                detected_az_api_ver["value"] = best_ver
                 if new_az_models:
                     azure_models_all.clear()
                     azure_models_all.extend(new_az_models)
@@ -1006,14 +1158,52 @@ def open_api_settings_dialog():
                     vis_models = get_visible_azure_models()
                     if not state.azure_deployment_var.get().strip() and vis_models:
                         state.azure_deployment_var.set(vis_models[0])
+
+                    cur_dep = state.azure_deployment_var.get().strip()
+                    rec = get_recommended_azure_settings(cur_dep, best_ver)
+                    diffs = []
+                    cur_ver = state.azure_api_version_var.get().strip()
+                    cur_rpm = safe_int_var(state.azure_rpm_var, rec["rpm"])
+                    cur_th = safe_int_var(state.azure_threads_var, rec["threads"])
+                    cur_tp = safe_float_var(state.azure_temperature_var, rec["temperature"])
+                    cur_tok = safe_int_var(state.azure_max_tokens_var, rec["max_tokens"])
+
+                    if cur_ver != rec["api_version"]:
+                        diffs.append(f"・APIバージョン: {cur_ver or '未設定'} → {rec['api_version']}")
+                    if cur_rpm != rec["rpm"]:
+                        diffs.append(f"・RPM: {cur_rpm} → {rec['rpm']}")
+                    if cur_th != rec["threads"]:
+                        diffs.append(f"・スレッド: {cur_th} → {rec['threads']}")
+                    if abs(cur_tp - rec["temperature"]) > 1e-6:
+                        diffs.append(f"・Temp: {cur_tp} → {rec['temperature']}")
+                    if cur_tok != rec["max_tokens"]:
+                        diffs.append(f"・最大トークン: {cur_tok} → {rec['max_tokens']}")
+
                     mode_note = f"（主力モデル {len(vis_models)}件 を表示中。すべて見る場合は「主力モデルのみ表示」のチェックを外してください）" if azure_mainstream_only_var.get() else f"（全 {len(vis_models)}件 を表示中）"
-                    messagebox.showinfo(
-                        "更新完了",
-                        f"最新のモデルリスト (全{len(azure_models_all)}件) を Azure から取得しました！\n"
-                        f"{mode_note}\n\n"
-                        f"※Azure AI Foundry 上でモデル名とは別の独自デプロイ名を付けている場合は、そのまま手入力してご使用ください。",
-                        parent=dialog
-                    )
+
+                    if diffs:
+                        ask_msg = (
+                            f"最新のモデルリスト (全{len(azure_models_all)}件) を Azure から取得しました！\n"
+                            f"{mode_note}\n\n"
+                            f"【現在のデプロイ（{cur_dep or '未選択'}）に対する推奨設定を確認しました】\n"
+                            + "\n".join(diffs)
+                            + "\n\nこれらの推奨値を適用しますか？\n"
+                            f"（※Azure側で独自のデプロイ名を付けている場合はそのまま維持されます）"
+                        )
+                        if messagebox.askyesno("更新完了・推奨値の確認", ask_msg, parent=dialog):
+                            state.azure_api_version_var.set(rec["api_version"])
+                            state.azure_rpm_var.set(rec["rpm"])
+                            state.azure_threads_var.set(rec["threads"])
+                            state.azure_temperature_var.set(rec["temperature"])
+                            state.azure_max_tokens_var.set(rec["max_tokens"])
+                    else:
+                        messagebox.showinfo(
+                            "更新完了",
+                            f"最新のモデルリスト (全{len(azure_models_all)}件) を Azure から取得しました！\n"
+                            f"{mode_note}\n\n"
+                            f"✅ 現在の設定（APIバージョン / RPM / スレッド / パラメータ）は推奨値と一致しています。",
+                            parent=dialog
+                        )
                 else:
                     messagebox.showinfo("情報", "取得可能なチャット対応モデルが見つかりませんでした。", parent=dialog)
             except Exception as e:
@@ -1026,8 +1216,7 @@ def open_api_settings_dialog():
         btn_fetch_az_models.pack(side=tk.LEFT, padx=(0, 12))
 
         ttk.Label(row_dep, text="APIバージョン:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
-        common_versions = ["2024-10-21", "2024-12-01-preview", "2025-01-01-preview", "2024-08-01-preview", "2024-06-01", "2024-02-15-preview"]
-        combo_ver = ttk.Combobox(row_dep, textvariable=state.azure_api_version_var, values=common_versions, width=16)
+        combo_ver = ttk.Combobox(row_dep, textvariable=state.azure_api_version_var, values=AZURE_API_VERSION_CANDIDATES, width=18)
         combo_ver.pack(side=tk.LEFT, padx=(0, 8))
 
         row_dep_opt = ttk.Frame(conn_frame, style="Card.TFrame")
@@ -1162,8 +1351,8 @@ def open_api_settings_dialog():
                 [
                     ["エンドポイントURL", "https://xxxx.openai.azure.com/", "Azure Portal の「キーとエンドポイント」画面に表示されるURLです。\n※誤って長いターゲットURI全体を貼り付けても自動でベースURLを抽出します。"],
                     ["APIキー", "32文字以上の英数字キー", "「KEY 1」または「KEY 2」のいずれかをコピーして貼り付けます。"],
-                    ["デプロイ名", "gpt-4o / gpt-4.1 など", "Azure AI Foundry の「デプロイ」画面で作成したモデルの名前です。"],
-                    ["APIバージョン", "2024-10-21 (推奨)", "通常はデフォルトの「2024-10-21」のままで問題ありません。最新Previewモデル利用時のみ変更してください。"]
+                    ["デプロイ名", "gpt-5 / gpt-5-mini / gpt-5.2 など", "Azure AI Foundry の「デプロイ」画面で作成したモデルの名前です。"],
+                    ["APIバージョン", f"{DEFAULT_AZURE_API_VERSION} (推奨)", f"通常は推奨値「{DEFAULT_AZURE_API_VERSION}」のままで問題ありません。「🌐 最新モデルを更新」を押すと利用可能な最新バージョンを自動確認できます。"]
                 ],
                 [150, 230, 480]
             )
@@ -1185,10 +1374,10 @@ def open_api_settings_dialog():
         ttk.Button(perf_action_inner, text="ℹ️ 設定ガイドを確認", command=show_azure_guide).pack(side=tk.LEFT)
 
         def reset_az_perf():
-            state.azure_rpm_var.set(60)
-            state.azure_threads_var.set(3)
-            if not state.azure_api_version_var.get().strip():
-                state.azure_api_version_var.set("2024-10-21")
+            rec = get_recommended_azure_settings(state.azure_deployment_var.get(), detected_az_api_ver["value"])
+            state.azure_api_version_var.set(rec["api_version"])
+            state.azure_rpm_var.set(rec["rpm"])
+            state.azure_threads_var.set(rec["threads"])
 
         ttk.Button(perf_action_inner, text="🔄 推奨値", command=reset_az_perf).pack(side=tk.RIGHT)
 
@@ -1208,13 +1397,29 @@ def open_api_settings_dialog():
 
         param_row2 = ttk.Frame(param_frame, style="Card.TFrame")
         param_row2.pack(fill=tk.X, pady=2)
-        ttk.Label(param_row2, text="※推論モデル(o1/o3/o4等)は自動で最適パラメータに調整されます", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8)).pack(side=tk.LEFT)
+        ttk.Label(param_row2, text="※推論モデル(GPT-5/6, o4等)は自動で最適パラメータに調整されます", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8)).pack(side=tk.LEFT)
 
         def reset_az_param():
-            state.azure_temperature_var.set(0.0)
-            state.azure_max_tokens_var.set(4096)
+            rec = get_recommended_azure_settings(state.azure_deployment_var.get(), detected_az_api_ver["value"])
+            state.azure_temperature_var.set(rec["temperature"])
+            state.azure_max_tokens_var.set(rec["max_tokens"])
 
         ttk.Button(param_row2, text="🔄 推奨値", command=reset_az_param).pack(side=tk.RIGHT, pady=(10, 0))
+
+        def _reset_azure_tab_all():
+            reset_az_perf()
+            reset_az_param()
+            rec = get_recommended_azure_settings(state.azure_deployment_var.get(), detected_az_api_ver["value"])
+            messagebox.showinfo(
+                "推奨値に戻しました",
+                f"Azure OpenAI Service の設定をすべて推奨値に戻しました。\n\n"
+                f"・APIバージョン: {rec['api_version']}\n"
+                f"・RPM: {rec['rpm']} / スレッド: {rec['threads']}\n"
+                f"・Temp: {rec['temperature']} / 最大トークン: {rec['max_tokens']}",
+                parent=dialog
+            )
+
+        tab_reset_handlers[str(parent_tab)] = _reset_azure_tab_all
 
         build_prompt_section(parent_tab, state.azure_custom_prompt_var)
 
@@ -1634,12 +1839,8 @@ def show_pdf_type_info():
 
     win = tk.Toplevel(state.root)
     win.title("🔍 PDFの内部データ構造 確認結果")
-    win.geometry("750x550")
     win.configure(bg=BG_COLOR)
-
-    x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - 375
-    y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - 275
-    win.geometry(f"+{x}+{y}")
+    center_window(win, state.root, 750, 550)
     win.grab_set()
 
     lbl = ttk.Label(win, text="選択されたPDFのデータ構造を解析しています...", font=("Segoe UI", 11, "bold"), background=BG_COLOR, foreground=PRIMARY)
@@ -1838,15 +2039,9 @@ def open_help_window(initial_tab="guide"):
     screen_h = state.root.winfo_screenheight()
     win_w = min(980, screen_w - 40)
     win_h = min(740, screen_h - 80)
-    win.geometry(f"{win_w}x{win_h}")
     win.configure(bg=BG_COLOR)
+    center_window(win, state.root, win_w, win_h)
     win.grab_set()
-
-    raw_x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - (win_w // 2)
-    raw_y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (win_h // 2)
-    x = max(10, min(raw_x, screen_w - win_w - 10))
-    y = max(10, min(raw_y, screen_h - win_h - 40))
-    win.geometry(f"+{x}+{y}")
 
     # --- 1. 上部ヘッダーバナー ---
     header_banner = tk.Frame(win, bg=CARD_BG, padx=20, pady=12, highlightbackground=BORDER_COLOR, highlightthickness=1)
@@ -1918,7 +2113,7 @@ def open_help_window(initial_tab="guide"):
         [
             ["Python標準ライブラリ\n(Internal)", "デジタル作成されたPDF\n（文字がマウス選択できるもの）", "不要\n(オフライン)", "処理が一瞬で終わり、文字コードから直接抜き出すため100%正確です。WordやExcelから直接出力したPDFに最適です。"],
             ["Gemini API\n(Google AI)", "スキャンされたPDF\n手書き書類・複雑な表", "必要", "Googleの最新AIが画像を見て人間のように文字と表構造を解読します。無料枠と課金枠を切り替え可能です。"],
-            ["Azure OpenAI API\n(法人向けAI)", "スキャンされたPDF\n社外秘・機密帳票・手書き表", "必要", "Microsoft Azure上のセキュアなAI（GPT-4o / GPT-4.1等）を使用します。入力データがAI学習に利用されないため企業利用に最適です。"],
+            ["Azure OpenAI API\n(法人向けAI)", "スキャンされたPDF\n社外秘・機密帳票・手書き表", "必要", "Microsoft Azure上のセキュアなAI（GPT-5 / GPT-6 等）を使用します。入力データがAI学習に利用されないため企業利用に最適です。"],
             ["Tesseract\n(ローカルOCR)", "スキャンされたPDF\n（きれいな印刷活字メイン）", "不要\n(オフライン)", "インターネットに接続できない環境でスキャンPDFから文字を読み取りたい場合に使用します。"]
         ],
         [160, 200, 100, 380]
@@ -2025,13 +2220,13 @@ def open_help_window(initial_tab="guide"):
 
     _create_accent_card(
         frame_ai, COLOR_PURPLE, "推奨 2: Azure OpenAI", "Azure OpenAI Service を使う場合（法人・機密データ・セキュア環境向け）",
-        "Microsoft Azure 上に構築された企業向け OpenAI モデル（GPT-4o / GPT-4.1 等）を利用します。入力データが外部のAI学習に利用されないため、社外秘の図面や帳票でも安心して処理できます。\n\n"
+        "Microsoft Azure 上に構築された企業向け OpenAI モデル（GPT-5 / GPT-6 等）を利用します。入力データが外部のAI学習に利用されないため、社外秘の図面や帳票でも安心して処理できます。\n\n"
         "【設定手順】\n"
         "1. Azure Portal または Azure AI Foundry (旧 Azure OpenAI Studio) を開きます。\n"
         "2. 対象リソースから以下の3点を確認します。\n"
         "   ・エンドポイントURL （例: https://xxxx.openai.azure.com/）\n"
         "   ・APIキー （KEY 1 または KEY 2）\n"
-        "   ・デプロイ名 （画像認識に対応した gpt-4o、gpt-4o-mini、gpt-4.1 等のモデルデプロイ名）\n"
+        "   ・デプロイ名 （画像認識に対応した gpt-5、gpt-5-mini、gpt-5.2 等のモデルデプロイ名）\n"
         "3. 本アプリの「⚙️ 詳細設定」→「🔷 Azure OpenAI Service の設定」タブに入力し、「🔌 接続テスト」ボタンを押します。",
         extra_builder=_build_azure_links
     )
@@ -2066,7 +2261,7 @@ def open_help_window(initial_tab="guide"):
         ("Q2. Gemini API で「429 (利用枠超過 / Quota Exceeded)」エラーが出る場合の対処法は？",
          "短時間にリクエストを送りすぎた（バースト制限）か、無料枠の1日あたりの上限に達しています。\n"
          "・「⚙️ 詳細設定」で RPM を小さく（例: 12以下）、スレッド数を「1」に設定してください。\n"
-         "・モデルを制限が緩く高速な『Gemini 3 Flash』または『Gemini 3.1 Flash-Lite Preview』に変更すると解消しやすくなります。"),
+         "・モデルを高速・軽量な『Gemini 4 Hydrogen』または『Gemini 3.8 Flash』『Gemini 3.5 Flash-Lite』に変更すると解消しやすくなります。"),
         ("Q3. Azure OpenAI で「404」や「401」エラーが出る場合はどこを確認すればよいですか？",
          "・401エラーの場合：APIキーが間違っているか、別のリソースのエンドポイントURLを入力している可能性があります。\n"
          "・404エラーの場合：「デプロイ名」が Azure AI Foundry 上で作成した名前と完全一致しているか確認してください（モデル名そのものではなく、ご自身で付けたデプロイ名を入力します）。"),
@@ -2211,14 +2406,10 @@ def open_about_dialog():
     win = tk.Toplevel(state.root)
     win.title(f"バージョン情報 - {APP_TITLE}")
     win_w, win_h = 480, 360
-    win.geometry(f"{win_w}x{win_h}")
     win.configure(bg=BG_COLOR)
     win.resizable(False, False)
+    center_window(win, state.root, win_w, win_h)
     win.grab_set()
-
-    x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - (win_w // 2)
-    y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - (win_h // 2)
-    win.geometry(f"+{x}+{y}")
 
     card = tk.Frame(win, bg=CARD_BG, highlightbackground=BORDER_COLOR, highlightthickness=1, padx=24, pady=20)
     card.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)

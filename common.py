@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 # 基本設定 & カラーパレット (常時ライトモード固定)
 # ==============================
 APP_TITLE, VERSION = "PdfEditMiya", "v3.0.0"
-WINDOW_WIDTH, WINDOW_HEIGHT = 840, 620
+WINDOW_WIDTH, WINDOW_HEIGHT = 860, 720
 
 BG_COLOR, CARD_BG = "#F0F4F8", "#FFFFFF"
 PRIMARY, PRIMARY_HOVER = "#0D6EFD", "#0B5ED7"
@@ -38,6 +38,16 @@ if not os.path.exists(APP_DIR):
 API_KEY_FILE = os.path.join(APP_DIR, ".pdfeditmiya_api_key.txt")
 AZURE_API_KEY_FILE = os.path.join(APP_DIR, ".pdfeditmiya_azure_api_key.txt")
 SETTINGS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_settings.json")
+
+DEFAULT_AZURE_API_VERSION = "2025-04-01-preview"
+AZURE_API_VERSION_CANDIDATES = [
+    "2025-04-01-preview",
+    "2025-01-01-preview",
+    "2024-12-01-preview",
+    "2024-10-21",
+    "2024-08-01-preview",
+    "2024-06-01"
+]
 
 # ==============================
 # ヘルプ・履歴テキスト
@@ -112,7 +122,7 @@ Googleの最新AIモデルを利用し、かすれた文字や複雑な表の罫
 ───────────────────────────
 ■ 2. Azure OpenAI Service を使う場合（法人・セキュア環境向け）
 ───────────────────────────
-Microsoft Azure 上に構築された企業向け OpenAI API（GPT-4o / GPT-4.1 等）を利用します。
+Microsoft Azure 上に構築された企業向け OpenAI API（GPT-5 / GPT-6 等）を利用します。
 入力データが外部のAI学習に利用されないセキュアな環境で、高精度なデータ抽出を行えます。
 
 [設定手順]
@@ -120,9 +130,9 @@ Microsoft Azure 上に構築された企業向け OpenAI API（GPT-4o / GPT-4.1 
 2. 作成した Azure OpenAI リソースから以下の3つの情報を確認します。
    ・エンドポイント (例: https://xxxx.openai.azure.com/)
    ・APIキー (KEY 1 または KEY 2)
-   ・デプロイ名 (画像認識に対応した gpt-4o や gpt-4o-mini、gpt-4.1 等のモデルデプロイ名)
+   ・デプロイ名 (画像認識に対応した gpt-5 や gpt-5-mini、gpt-5.2 等のモデルデプロイ名)
 3. 本アプリのエンジンで「Azure OpenAI API」を選択し、「詳細設定」ボタンを押します。
-4. 「Azure OpenAI Service」タブにエンドポイント、APIキー、デプロイ名を入力し、「テスト」ボタンを押して通信を確認してください。
+4. 「Azure OpenAI Service」タブにエンドポイント、APIキー、デプロイ名を入力し、「接続テスト」ボタンを押して通信を確認してください。
 
 ───────────────────────────
 ■ 3. Tesseract（ローカルOCR）を使う場合（オフライン環境向け）
@@ -217,7 +227,7 @@ def parse_azure_endpoint_info(endpoint_str, deployment_str="", api_version_str="
     """
     raw_ep = (endpoint_str or "").strip()
     dep = (deployment_str or "").strip()
-    ver = (api_version_str or "").strip() or "2024-10-21"
+    ver = (api_version_str or "").strip() or DEFAULT_AZURE_API_VERSION
 
     if not raw_ep:
         return "", dep, ver
@@ -386,7 +396,7 @@ def diagnose_api_error(provider, error, model_or_deployment="", endpoint=""):
                 ],
                 "actions": [
                     "「APIバージョン」を「2024-10-21」または「2024-12-01-preview」「2025-01-01-preview」等に切り替えて再テストしてください。",
-                    "デプロイしているモデルが gpt-4o / gpt-4.1 等のチャット・画像対応モデルか確認してください。"
+                    "デプロイしているモデルが gpt-5 / gpt-5-mini / gpt-6 等のチャット・画像対応モデルか確認してください。"
                 ],
                 "raw": err_str
             }
@@ -445,8 +455,8 @@ def diagnose_api_error(provider, error, model_or_deployment="", endpoint=""):
                 "お使いのアカウント（無料枠等）ではこのモデルが公開されていません。"
             ],
             "actions": [
-                "モデル選択欄の右にある「🌐 更新」ボタンを押して、最新の利用可能なモデル一覧を取得してください。",
-                "「Gemini 3 Flash」や「Gemini 2.5 Flash」などの標準モデルに切り替えて再テストしてください。"
+                "モデル選択欄の右にある「🌐 最新モデルを更新」ボタンを押して、最新の利用可能なモデル一覧を取得してください。",
+                "「Gemini 4 Hydrogen」や「Gemini 3.8 Flash」などの主力モデルに切り替えて再テストしてください。"
             ],
             "raw": err_str
         }
@@ -463,7 +473,7 @@ def diagnose_api_error(provider, error, model_or_deployment="", endpoint=""):
                     f"無料枠（Free Tier）では「{target_name}」が利用対象外になっている、またはプロジェクトのクォータが 0 になっています。"
                 ],
                 "actions": [
-                    "「Gemini 3 Flash」「Gemini 3.1 Flash-Lite Preview」「Gemini 2.5 Flash」等の無料枠対応モデルを選択してください。",
+                    "「Gemini 4 Hydrogen」「Gemini 3.8 Flash」「Gemini 3.5 Flash-Lite」等の無料枠対応モデルを選択してください。",
                     "課金枠（Paid Tier）をご利用の場合は、Google AI Studio で課金設定が有効になっているか確認してください。"
                 ],
                 "raw": err_str
@@ -526,6 +536,30 @@ def format_api_error_message(diag):
         lines.append("")
     lines.append(f"【詳細（エラー原文）】\n{diag.get('raw', '')}")
     return "\n".join(lines)
+
+def safe_int_var(tk_var, default, min_val=None, max_val=None):
+    """Tkinter の IntVar から安全に整数を取得する（空欄や不正値入力時の TclError を防止）"""
+    try:
+        val = int(tk_var.get())
+    except Exception:
+        val = default
+    if min_val is not None:
+        val = max(min_val, val)
+    if max_val is not None:
+        val = min(max_val, val)
+    return val
+
+def safe_float_var(tk_var, default, min_val=None, max_val=None):
+    """Tkinter の DoubleVar から安全に小数を取得する（空欄や不正値入力時の TclError を防止）"""
+    try:
+        val = float(tk_var.get())
+    except Exception:
+        val = default
+    if min_val is not None:
+        val = max(min_val, val)
+    if max_val is not None:
+        val = min(max_val, val)
+    return val
 
 def natural_sort_key(s):
     """ファイル名や文字列内の数字を数値として評価する自然順ソートキー"""
@@ -683,6 +717,7 @@ class SharedState:
         self.cancelled = False
         self.saved_custom_prompts = []
         self.loaded_preset_name = "未読込"
+        self.save_settings_callback = None
 
         # 外部から更新が必要なUIウィジェットへの参照
         self.path_label = None

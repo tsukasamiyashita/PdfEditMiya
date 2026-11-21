@@ -7,7 +7,8 @@ import tkinter.scrolledtext as st
 from common import *
 from dialogs import (
     open_api_settings_dialog, open_crop_selector, reset_crop_regions,
-    show_pdf_type_info, open_help_window, open_about_dialog
+    show_pdf_type_info, open_help_window, open_about_dialog,
+    show_runtime_error_dialog, center_window
 )
 from gemini_engine import extract_gemini_task, extract_azure_task
 from engines import (
@@ -33,16 +34,13 @@ rb_text_mode = None
 def show_message(msg, color=PRIMARY):
     def _task():
         win = tk.Toplevel(state.root)
-        win.geometry("260x90")
         win.configure(bg=CARD_BG)
         win.attributes("-topmost", True)
-        x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - 130
-        y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - 45
-        win.geometry(f"+{x}+{y}")
+        center_window(win, state.root, 320, 96)
         win.overrideredirect(True)
         frame = tk.Frame(win, bg=CARD_BG, highlightbackground=color, highlightthickness=2)
         frame.pack(expand=True, fill=tk.BOTH)
-        ttk.Label(frame, text=msg, foreground=color, font=("Segoe UI", 10, "bold"), background=CARD_BG, wraplength=240).pack(expand=True)
+        ttk.Label(frame, text=msg, foreground=color, font=("Segoe UI", 10, "bold"), background=CARD_BG, wraplength=290, justify="center").pack(expand=True, padx=10, pady=8)
         win.after(2500, win.destroy)
     state.root.after(0, _task)
 
@@ -85,12 +83,9 @@ def show_processing(total_files=1):
     global processing_popup, overall_label, overall_progress, file_label, file_progress, btn_cancel
     processing_popup = tk.Toplevel(state.root)
     processing_popup.title("処理を実行中...")
-    processing_popup.geometry("440x280")
     processing_popup.configure(bg=CARD_BG)
+    center_window(processing_popup, state.root, 460, 285)
     processing_popup.grab_set()
-    x = state.root.winfo_x() + (WINDOW_WIDTH // 2) - 220
-    y = state.root.winfo_y() + (WINDOW_HEIGHT // 2) - 140
-    processing_popup.geometry(f"+{x}+{y}")
 
     engine_name = state.engine_var.get()
     if engine_name == "Gemini":
@@ -140,7 +135,7 @@ def close_processing():
             processing_popup = None
     state.root.after(0, _task)
 
-def run_task(func, task_name):
+def run_task(func, task_name, files, save_dir, options):
     state.cancelled = False
     try:
         def _start_status():
@@ -148,43 +143,6 @@ def run_task(func, task_name):
                 state.status_label.config(text=f"ステータス: {task_name} を実行中...", foreground=PRIMARY)
         state.root.after(0, _start_status)
 
-        files = state.selected_files if state.current_mode == "file" else ([os.path.join(state.selected_folder, f) for f in os.listdir(state.selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))] if state.selected_folder else [])
-        if not files:
-            close_processing()
-            return
-        save_dir = os.path.dirname(files[0]) if state.save_option.get() == 1 else state.preset_save_dir
-
-        plan = state.api_plan_var.get()
-        is_free = (plan == "free")
-        api_key = state.api_key_free_var.get().strip() if is_free else state.api_key_paid_var.get().strip()
-        model = state.gemini_model_free_var.get() if is_free else state.gemini_model_paid_var.get()
-        rpm = state.api_rpm_free_var.get() if is_free else state.api_rpm_paid_var.get()
-
-        options = {
-            "rotate_deg": state.rotate_option.get(),
-            "crop_regions": state.selected_crop_regions,
-            "out_format": state.output_format_var.get(),
-            "folder_name": os.path.basename(state.selected_folder) if state.selected_folder else "Merged",
-            "api_key": api_key,
-            "models_to_try": [model] if state.engine_var.get() == "Gemini" else [],
-            "api_plan": plan,
-            "api_rpm": rpm,
-            "temperature": state.temperature_free_var.get() if is_free else state.temperature_paid_var.get(),
-            "disable_safety": state.safety_free_var.get() if is_free else state.safety_paid_var.get(),
-            "max_tokens": state.max_tokens_free_var.get() if is_free else state.max_tokens_paid_var.get(),
-            "custom_prompt": state.custom_prompt_free_var.get() if is_free else state.custom_prompt_paid_var.get(),
-            "threads": state.threads_free_var.get() if is_free else state.threads_paid_var.get(),
-            "azure_api_key": state.azure_api_key_var.get().strip(),
-            "azure_endpoint": state.azure_endpoint_var.get().strip(),
-            "azure_deployment": state.azure_deployment_var.get().strip(),
-            "azure_api_version": state.azure_api_version_var.get().strip() or "2024-10-21",
-            "azure_rpm": state.azure_rpm_var.get(),
-            "azure_temperature": state.azure_temperature_var.get(),
-            "azure_max_tokens": state.azure_max_tokens_var.get(),
-            "azure_custom_prompt": state.azure_custom_prompt_var.get(),
-            "azure_threads": state.azure_threads_var.get(),
-            "extract_mode": state.extract_mode_var.get()
-        }
         func(files, save_dir, options, UIController())
         close_processing()
 
@@ -204,14 +162,26 @@ def run_task(func, task_name):
         close_processing()
         err_msg = str(e)
         def _err_status(msg=err_msg):
-            messagebox.showerror("実行エラー", f"{task_name} 中にエラーが発生しました。\n\n詳細:\n{msg}", parent=state.root)
+            show_runtime_error_dialog(state.root, task_name, msg)
             if state.status_label:
                 state.status_label.config(text=f"ステータス: {task_name} でエラーが発生しました", foreground=ERROR)
         state.root.after(100, _err_status)
 
+def _collect_target_files():
+    if state.current_mode == "file":
+        return list(state.selected_files)
+    if state.selected_folder and os.path.isdir(state.selected_folder):
+        return [
+            os.path.join(state.selected_folder, f)
+            for f in os.listdir(state.selected_folder)
+            if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))
+        ]
+    return []
+
 def safe_run(func, task_name="処理"):
-    files = state.selected_files if state.current_mode == "file" else ([os.path.join(state.selected_folder, f) for f in os.listdir(state.selected_folder) if f.lower().endswith((".pdf", ".xlsx", ".xlsm", ".xls", ".csv", ".txt", ".json", ".md", ".docx"))] if state.selected_folder else [])
+    files = _collect_target_files()
     if not files:
+        messagebox.showinfo("情報", "処理対象のファイルが見つかりません。")
         return
     if state.save_option.get() == 2 and not state.preset_save_dir:
         folder = filedialog.askdirectory(title="保存先フォルダを選択")
@@ -220,8 +190,47 @@ def safe_run(func, task_name="処理"):
         state.preset_save_dir = folder
         if state.save_label:
             state.save_label.config(text=state.preset_save_dir)
+
+    save_dir = os.path.dirname(files[0]) if state.save_option.get() == 1 else state.preset_save_dir
+    if not save_dir or not os.path.isdir(save_dir):
+        messagebox.showerror("エラー", "保存先フォルダが正しく指定されていません。")
+        return
+
+    # メインスレッド側で Tkinter 変数を安全にすべて読み取ってからワーカースレッドへ渡す
+    plan = state.api_plan_var.get()
+    is_free = (plan == "free")
+    api_key = state.api_key_free_var.get().strip() if is_free else state.api_key_paid_var.get().strip()
+    model = state.gemini_model_free_var.get() if is_free else state.gemini_model_paid_var.get()
+    rpm = safe_int_var(state.api_rpm_free_var, 12, 1, 2000) if is_free else safe_int_var(state.api_rpm_paid_var, 300, 1, 2000)
+
+    options = {
+        "rotate_deg": safe_int_var(state.rotate_option, 270),
+        "crop_regions": list(state.selected_crop_regions),
+        "out_format": state.output_format_var.get(),
+        "folder_name": os.path.basename(state.selected_folder) if state.selected_folder else "Merged",
+        "api_key": api_key,
+        "models_to_try": [model] if state.engine_var.get() == "Gemini" else [],
+        "api_plan": plan,
+        "api_rpm": rpm,
+        "temperature": safe_float_var(state.temperature_free_var, 0.0, 0.0, 2.0) if is_free else safe_float_var(state.temperature_paid_var, 0.0, 0.0, 2.0),
+        "disable_safety": bool(state.safety_free_var.get()) if is_free else bool(state.safety_paid_var.get()),
+        "max_tokens": safe_int_var(state.max_tokens_free_var, 8192, 1024, 2097152) if is_free else safe_int_var(state.max_tokens_paid_var, 8192, 1024, 2097152),
+        "custom_prompt": state.custom_prompt_free_var.get() if is_free else state.custom_prompt_paid_var.get(),
+        "threads": safe_int_var(state.threads_free_var, 1, 1, 20) if is_free else safe_int_var(state.threads_paid_var, 5, 1, 20),
+        "azure_api_key": state.azure_api_key_var.get().strip(),
+        "azure_endpoint": state.azure_endpoint_var.get().strip(),
+        "azure_deployment": state.azure_deployment_var.get().strip(),
+        "azure_api_version": state.azure_api_version_var.get().strip() or DEFAULT_AZURE_API_VERSION,
+        "azure_rpm": safe_int_var(state.azure_rpm_var, 60, 1, 2000),
+        "azure_temperature": safe_float_var(state.azure_temperature_var, 0.0, 0.0, 2.0),
+        "azure_max_tokens": safe_int_var(state.azure_max_tokens_var, 8192, 1024, 128000),
+        "azure_custom_prompt": state.azure_custom_prompt_var.get(),
+        "azure_threads": safe_int_var(state.azure_threads_var, 3, 1, 20),
+        "extract_mode": state.extract_mode_var.get()
+    }
+
     show_processing(len(files))
-    threading.Thread(target=run_task, args=(func, task_name), daemon=True).start()
+    threading.Thread(target=run_task, args=(func, task_name, files, save_dir, options), daemon=True).start()
 
 def run_selected_extraction():
     engine = state.engine_var.get()
@@ -354,11 +363,11 @@ def load_settings():
         except Exception as e:
             print(f"Failed to load settings: {e}")
 
-def save_settings():
+def save_settings(silent=False):
     root.update_idletasks()
     settings = {
-        "rotate_option": state.rotate_option.get(),
-        "save_option": state.save_option.get(),
+        "rotate_option": safe_int_var(state.rotate_option, 270),
+        "save_option": safe_int_var(state.save_option, 1),
         "preset_save_dir": state.preset_save_dir,
         "engine_var": state.engine_var.get(),
         "output_format_var": state.output_format_var.get(),
@@ -368,27 +377,27 @@ def save_settings():
         "api_key_paid_var": state.api_key_paid_var.get().strip(),
         "gemini_model_free_var": state.gemini_model_free_var.get(),
         "gemini_model_paid_var": state.gemini_model_paid_var.get(),
-        "api_rpm_free_var": state.api_rpm_free_var.get(),
-        "api_rpm_paid_var": state.api_rpm_paid_var.get(),
-        "temperature_free_var": state.temperature_free_var.get(),
-        "temperature_paid_var": state.temperature_paid_var.get(),
-        "safety_free_var": state.safety_free_var.get(),
-        "safety_paid_var": state.safety_paid_var.get(),
-        "max_tokens_free_var": state.max_tokens_free_var.get(),
-        "max_tokens_paid_var": state.max_tokens_paid_var.get(),
+        "api_rpm_free_var": safe_int_var(state.api_rpm_free_var, 12, 1, 2000),
+        "api_rpm_paid_var": safe_int_var(state.api_rpm_paid_var, 300, 1, 2000),
+        "temperature_free_var": safe_float_var(state.temperature_free_var, 0.0, 0.0, 2.0),
+        "temperature_paid_var": safe_float_var(state.temperature_paid_var, 0.0, 0.0, 2.0),
+        "safety_free_var": bool(state.safety_free_var.get()),
+        "safety_paid_var": bool(state.safety_paid_var.get()),
+        "max_tokens_free_var": safe_int_var(state.max_tokens_free_var, 8192, 1024, 2097152),
+        "max_tokens_paid_var": safe_int_var(state.max_tokens_paid_var, 8192, 1024, 2097152),
         "custom_prompt_free_var": state.custom_prompt_free_var.get(),
         "custom_prompt_paid_var": state.custom_prompt_paid_var.get(),
-        "threads_free_var": state.threads_free_var.get(),
-        "threads_paid_var": state.threads_paid_var.get(),
+        "threads_free_var": safe_int_var(state.threads_free_var, 1, 1, 20),
+        "threads_paid_var": safe_int_var(state.threads_paid_var, 5, 1, 20),
         "azure_api_key_var": state.azure_api_key_var.get().strip(),
         "azure_endpoint_var": state.azure_endpoint_var.get().strip(),
         "azure_deployment_var": state.azure_deployment_var.get().strip(),
         "azure_api_version_var": state.azure_api_version_var.get().strip(),
-        "azure_rpm_var": state.azure_rpm_var.get(),
-        "azure_temperature_var": state.azure_temperature_var.get(),
-        "azure_max_tokens_var": state.azure_max_tokens_var.get(),
+        "azure_rpm_var": safe_int_var(state.azure_rpm_var, 60, 1, 2000),
+        "azure_temperature_var": safe_float_var(state.azure_temperature_var, 0.0, 0.0, 2.0),
+        "azure_max_tokens_var": safe_int_var(state.azure_max_tokens_var, 8192, 1024, 128000),
         "azure_custom_prompt_var": state.azure_custom_prompt_var.get(),
-        "azure_threads_var": state.azure_threads_var.get(),
+        "azure_threads_var": safe_int_var(state.azure_threads_var, 3, 1, 20),
         "saved_custom_prompts": state.saved_custom_prompts,
         "window_width": root.winfo_width(),
         "window_height": root.winfo_height()
@@ -408,10 +417,12 @@ def save_settings():
             with open(AZURE_API_KEY_FILE, "w", encoding="utf-8") as f:
                 f.write(az_key)
 
-        messagebox.showinfo("保存完了", "現在の選択項目を保存しました。\n次回起動時もこの設定が適用されます。")
-        update_ui()
+        if not silent:
+            messagebox.showinfo("保存完了", "現在の選択項目を保存しました。\n次回起動時もこの設定が適用されます。")
+            update_ui()
     except Exception as e:
-        messagebox.showerror("エラー", f"設定の保存に失敗しました。\n{e}")
+        if not silent:
+            messagebox.showerror("エラー", f"設定の保存に失敗しました。\n{e}")
 
 # ==============================
 # UI操作関連関数
@@ -483,13 +494,16 @@ def update_plan_indicator():
     engine = state.engine_var.get()
     if engine == "AzureOpenAI":
         dep = state.azure_deployment_var.get().strip() or "未設定"
-        state.plan_indicator.config(text=f"🔷 Azure OpenAI ({dep})", foreground=PRIMARY)
-    else:
+        state.plan_indicator.config(text=f"🔷 Azure OpenAI / {dep}", foreground=PRIMARY)
+    elif engine == "Gemini":
         plan = state.api_plan_var.get()
+        m_name = state.gemini_model_free_var.get() if plan == "free" else state.gemini_model_paid_var.get()
         if plan == "free":
-            state.plan_indicator.config(text="🟢 無料枠 (Free)", foreground=COLOR_SUCCESS)
+            state.plan_indicator.config(text=f"🟢 無料枠 (Free) / {m_name}", foreground=COLOR_SUCCESS)
         else:
-            state.plan_indicator.config(text="🔵 課金枠 (Paid)", foreground=PRIMARY)
+            state.plan_indicator.config(text=f"🔵 課金枠 (Paid) / {m_name}", foreground=PRIMARY)
+    else:
+        state.plan_indicator.config(text="（AIエンジン選択時に設定可能）", foreground=MUTED_TEXT)
 
 format_radiobuttons = {}
 def toggle_extraction_settings(*args):
@@ -522,7 +536,27 @@ def toggle_extraction_settings(*args):
             child.configure(state=state_crop)
 
 def update_ui():
-    state.path_label.config(text="\n".join(state.selected_files) if state.current_mode == "file" else (f"フォルダ: {state.selected_folder}" if state.selected_folder else "未選択"))
+    if state.current_mode == "file" and state.selected_files:
+        cnt = len(state.selected_files)
+        if cnt == 1:
+            fname = os.path.basename(state.selected_files[0])
+            path_text = f"📄 {fname}\n({state.selected_files[0]})"
+        elif cnt <= 3:
+            names = ", ".join(os.path.basename(p) for p in state.selected_files)
+            path_text = f"📄 選択中: {cnt} 件のファイル ({names})"
+        else:
+            names = ", ".join(os.path.basename(p) for p in state.selected_files[:3])
+            path_text = f"📄 選択中: {cnt} 件のファイル ({names} ほか {cnt - 3} 件)"
+        state.path_label.config(text=path_text, foreground=PRIMARY, font=("Segoe UI", 9, "bold"))
+    elif state.current_mode == "folder" and state.selected_folder:
+        target_cnt = len(_collect_target_files())
+        state.path_label.config(
+            text=f"📁 フォルダ: {state.selected_folder}  （対象ファイル: {target_cnt} 件）",
+            foreground=PRIMARY, font=("Segoe UI", 9, "bold")
+        )
+    else:
+        state.path_label.config(text="未選択（上のボタンからファイルまたはフォルダを選んでください）", foreground=MUTED_TEXT, font=("Segoe UI", 9))
+
     is_active = state.current_mode is not None
     state_val = tk.NORMAL if is_active else tk.DISABLED
     btn_split.config(state=state_val)
@@ -601,11 +635,14 @@ if os.path.exists(icon_path):
             root.iconphoto(True, tk.PhotoImage(file=icon_path))
         except Exception as e2:
             print(f"Failed to set icon: {e2}")
-root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
-root.minsize(width=740, height=600)
+init_w = min(WINDOW_WIDTH, max(740, root.winfo_screenwidth() - 40))
+init_h = min(WINDOW_HEIGHT, max(580, root.winfo_screenheight() - 80))
+root.geometry(f"{init_w}x{init_h}+20+20")
+root.minsize(width=740, height=580)
 root.configure(bg=BG_COLOR)
 root.bind_all("<MouseWheel>", _on_mousewheel)
 state.root = root
+state.save_settings_callback = lambda: save_settings(silent=True)
 
 style = ttk.Style()
 if "clam" in style.theme_names():
@@ -682,10 +719,10 @@ state.threads_paid_var = tk.IntVar(value=5)
 state.azure_api_key_var = tk.StringVar(value=get_azure_api_key() or "")
 state.azure_endpoint_var = tk.StringVar(value="")
 state.azure_deployment_var = tk.StringVar(value="gpt-5-mini")
-state.azure_api_version_var = tk.StringVar(value="2024-10-21")
+state.azure_api_version_var = tk.StringVar(value=DEFAULT_AZURE_API_VERSION)
 state.azure_rpm_var = tk.IntVar(value=60)
 state.azure_temperature_var = tk.DoubleVar(value=0.0)
-state.azure_max_tokens_var = tk.IntVar(value=4096)
+state.azure_max_tokens_var = tk.IntVar(value=8192)
 state.azure_custom_prompt_var = tk.StringVar(value="")
 state.azure_threads_var = tk.IntVar(value=3)
 
@@ -716,14 +753,14 @@ ttk.Label(title_frame, text=APP_TITLE, font=("Segoe UI", 16, "bold"), foreground
 ttk.Label(title_frame, text=f" {VERSION}", font=("Segoe UI", 10), foreground=MUTED_TEXT, background=BG_COLOR).pack(side=tk.LEFT, pady=(6, 0))
 ttk.Button(title_frame, text="❓ ヘルプ / 使い方ガイド", command=lambda: open_help_window("guide"), style="Primary.TButton").pack(side=tk.RIGHT, pady=(2, 0))
 
-file_card = ttk.Frame(main_container, style="Card.TFrame", padding=5)
-file_card.pack(fill=tk.X, pady=2)
+file_card = tk.Frame(main_container, bg=CARD_BG, highlightbackground=BORDER_COLOR, highlightthickness=1, padx=8, pady=8)
+file_card.pack(fill=tk.X, pady=(2, 4))
 btn_frame = ttk.Frame(file_card, style="Card.TFrame")
 btn_frame.pack()
 ttk.Button(btn_frame, text="📄 ファイルを選択", command=select_files, width=20, style="Primary.TButton").grid(row=0, column=0, padx=8)
 ttk.Button(btn_frame, text="📁 フォルダを選択", command=select_folder, width=20, style="Primary.TButton").grid(row=0, column=1, padx=8)
-state.path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=TEXT_COLOR, wraplength=580, justify="center")
-state.path_label.pack(pady=(4, 0))
+state.path_label = ttk.Label(file_card, text="未選択", background=CARD_BG, foreground=MUTED_TEXT, wraplength=740, justify="center")
+state.path_label.pack(pady=(6, 0))
 
 settings_grid = ttk.Frame(main_container, style="Main.TFrame")
 settings_grid.pack(fill=tk.X, pady=2)

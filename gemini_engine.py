@@ -21,7 +21,9 @@ from common import (
     normalize_text,
     parse_azure_endpoint_info,
     diagnose_api_error,
-    format_api_error_message
+    format_api_error_message,
+    DEFAULT_AZURE_API_VERSION,
+    AZURE_API_VERSION_CANDIDATES
 )
 
 from engines import (
@@ -1020,10 +1022,59 @@ def fetch_gemini_models(api_key):
     return new_models
 
 
-def fetch_azure_models(api_key, endpoint, api_version="2024-10-21"):
+def get_recommended_gemini_settings(model_id, is_free=True):
+    """Gemini モデルとプラン（無料枠/課金枠）に応じた推奨設定を返す"""
+    mid = (model_id or "").lower()
+    if any(k in mid for k in ["carbon", "pro"]):
+        rpm = 1 if is_free else 100
+        threads = 1 if is_free else 3
+    elif "neon" in mid:
+        rpm = 2 if is_free else 150
+        threads = 1 if is_free else 5
+    elif "argon" in mid:
+        rpm = 5 if is_free else 200
+        threads = 1 if is_free else 5
+    else:
+        rpm = 12 if is_free else 300
+        threads = 1 if is_free else 5
+    return {
+        "rpm": rpm,
+        "threads": threads,
+        "temperature": 0.0,
+        "max_tokens": 8192,
+        "disable_safety": True
+    }
+
+
+def get_recommended_azure_settings(deployment_name, detected_api_version=None):
+    """Azure OpenAI デプロイ名（モデル種別）に応じた推奨設定を返す"""
+    dep = (deployment_name or "").lower()
+    api_ver = (detected_api_version or "").strip() or DEFAULT_AZURE_API_VERSION
+    if any(k in dep for k in ["mini", "nano"]) and not any(dep.startswith(p) for p in ["o1", "o3", "o4"]):
+        rpm = 120
+        threads = 5
+        max_tokens = 8192
+    elif any(dep.startswith(p) or f"-{p}" in dep for p in ["gpt-6", "o4", "o3", "o1"]) or "pro" in dep:
+        rpm = 30
+        threads = 2
+        max_tokens = 16384
+    else:
+        rpm = 60
+        threads = 3
+        max_tokens = 8192
+    return {
+        "api_version": api_ver,
+        "rpm": rpm,
+        "threads": threads,
+        "temperature": 0.0,
+        "max_tokens": max_tokens
+    }
+
+
+def fetch_azure_models_with_meta(api_key, endpoint, api_version=DEFAULT_AZURE_API_VERSION):
     """
     Azure OpenAI Service / Azure AI Foundry から利用可能な最新モデル一覧を取得し、
-    新しい世代・使いやすいモデル順にソートしてモデルIDのリストを返す。
+    同時に通信に成功した最新の推奨APIバージョンも判定して (model_ids, best_api_version) を返す。
     """
     base_endpoint, _, resolved_ver = parse_azure_endpoint_info(endpoint, "", api_version)
     if not base_endpoint:
@@ -1032,16 +1083,22 @@ def fetch_azure_models(api_key, endpoint, api_version="2024-10-21"):
         raise Exception("APIキーが入力されていません。")
 
     api_key = api_key.strip()
-    candidate_urls = [
-        f"{base_endpoint.rstrip('/')}/openai/models?api-version={urllib.parse.quote(resolved_ver)}",
+    # 新しい推奨バージョンから順に試行して、利用可能な最新APIバージョンも同時に特定する
+    versions_to_try = []
+    for v in list(AZURE_API_VERSION_CANDIDATES) + [resolved_ver]:
+        if v and v not in versions_to_try:
+            versions_to_try.append(v)
+
+    candidate_requests = [
+        (f"{base_endpoint.rstrip('/')}/openai/models?api-version={urllib.parse.quote(v)}", v)
+        for v in versions_to_try
     ]
-    if resolved_ver != "2024-10-21":
-        candidate_urls.append(f"{base_endpoint.rstrip('/')}/openai/models?api-version=2024-10-21")
-    candidate_urls.append(f"{base_endpoint.rstrip('/')}/openai/v1/models")
+    candidate_requests.append((f"{base_endpoint.rstrip('/')}/openai/v1/models", resolved_ver or DEFAULT_AZURE_API_VERSION))
 
     raw_data = None
+    best_api_version = resolved_ver or DEFAULT_AZURE_API_VERSION
     last_err = None
-    for url in candidate_urls:
+    for url, ver_label in candidate_requests:
         req = urllib.request.Request(
             url,
             headers={
@@ -1053,6 +1110,7 @@ def fetch_azure_models(api_key, endpoint, api_version="2024-10-21"):
         try:
             with urllib.request.urlopen(req, timeout=30.0) as resp:
                 raw_data = json.loads(resp.read().decode("utf-8"))
+                best_api_version = ver_label
                 break
         except urllib.error.HTTPError as http_err:
             err_body = ""
@@ -1122,11 +1180,16 @@ def fetch_azure_models(api_key, endpoint, api_version="2024-10-21"):
             rank, sub_ver = 8, 0.0
         else:
             rank, sub_ver = 9, 0.0
-        # 日付サフィックスがないエイリアス（例: gpt-5）を日付付き（gpt-5-2026-...）より先に表示
         has_date = 1 if re.search(r'-20\d{2}-', m) else 0
         return (rank, sub_ver, has_date, m)
 
     model_ids.sort(key=_azure_sort_key)
+    return model_ids, best_api_version
+
+
+def fetch_azure_models(api_key, endpoint, api_version=DEFAULT_AZURE_API_VERSION):
+    """後方互換ラッパー: モデルIDのリストのみを返す"""
+    model_ids, _ = fetch_azure_models_with_meta(api_key, endpoint, api_version)
     return model_ids
 
 
