@@ -906,5 +906,17 @@ except AttributeError:
 load_settings()
 update_ui()
 
+def _maximize_root():
+    try:
+        root.state("zoomed")
+    except Exception:
+        try:
+            root.attributes("-zoomed", True)
+        except Exception:
+            pass
+
+_maximize_root()
+root.after(0, _maximize_root)
+
 if __name__ == "__main__":
     root.mainloop()
