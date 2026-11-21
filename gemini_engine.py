@@ -656,7 +656,7 @@ def _call_azure_openai_api(api_key, endpoint, deployment, api_version, prompt, p
     ]
 
     dep_lower = resolved_dep.lower()
-    is_reasoning_model = any(dep_lower.startswith(prefix) or f"-{prefix}" in dep_lower for prefix in ["o1", "o3", "o4", "gpt-5"])
+    is_reasoning_model = any(dep_lower.startswith(prefix) or f"-{prefix}" in dep_lower for prefix in ["o1", "o3", "o4", "gpt-5", "gpt-6"])
 
     use_max_completion_tokens = is_reasoning_model
     use_temperature = not is_reasoning_model
@@ -985,3 +985,251 @@ def extract_azure_task(files, save_dir, options, ui):
                 ui.update_overall(completed_pages, total_tasks, f"全体の進捗 ( {completed_pages} / {total_tasks} ページ完了 )")
 
     ui.set_determinate(total_tasks, total_tasks, "すべての処理が完了しました")
+
+
+# ==============================
+# 各AIエンジン 最新モデル一覧取得機能
+# ==============================
+def fetch_gemini_models(api_key):
+    """Gemini API から最新の利用可能な生成モデル一覧を取得し、新しいバージョン順にソートして返す"""
+    if not api_key or not api_key.strip():
+        raise Exception("APIキーが入力されていません。")
+
+    genai.configure(api_key=api_key.strip())
+    new_models = []
+    exclude_keywords = ["tts", "audio", "image", "vision", "embedding", "aqa", "learnlm"]
+
+    for m in genai.list_models():
+        methods = getattr(m, "supported_generation_methods", []) or []
+        if "generateContent" in methods and "gemini" in m.name.lower():
+            model_id = m.name.replace("models/", "")
+            if any(k in model_id.lower() for k in exclude_keywords):
+                continue
+            display_name = getattr(m, "display_name", model_id) or model_id
+            new_models.append((f"{display_name} ({model_id})", model_id))
+
+    def _gemini_sort_key(item):
+        mid = item[1].lower()
+        ver_match = re.search(r'gemini-(\d+(?:\.\d+)?)', mid)
+        ver_num = float(ver_match.group(1)) if ver_match else 0.0
+        is_preview = 1 if ("preview" in mid or "exp" in mid) else 0
+        is_flash = 1 if "flash" in mid else 0
+        return (-ver_num, is_preview, -is_flash, mid)
+
+    new_models.sort(key=_gemini_sort_key)
+    return new_models
+
+
+def fetch_azure_models(api_key, endpoint, api_version="2024-10-21"):
+    """
+    Azure OpenAI Service / Azure AI Foundry から利用可能な最新モデル一覧を取得し、
+    新しい世代・使いやすいモデル順にソートしてモデルIDのリストを返す。
+    """
+    base_endpoint, _, resolved_ver = parse_azure_endpoint_info(endpoint, "", api_version)
+    if not base_endpoint:
+        raise Exception("エンドポイントURLが正しく入力されていません。")
+    if not api_key or not api_key.strip():
+        raise Exception("APIキーが入力されていません。")
+
+    api_key = api_key.strip()
+    candidate_urls = [
+        f"{base_endpoint.rstrip('/')}/openai/models?api-version={urllib.parse.quote(resolved_ver)}",
+    ]
+    if resolved_ver != "2024-10-21":
+        candidate_urls.append(f"{base_endpoint.rstrip('/')}/openai/models?api-version=2024-10-21")
+    candidate_urls.append(f"{base_endpoint.rstrip('/')}/openai/v1/models")
+
+    raw_data = None
+    last_err = None
+    for url in candidate_urls:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "api-key": api_key
+            },
+            method="GET"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30.0) as resp:
+                raw_data = json.loads(resp.read().decode("utf-8"))
+                break
+        except urllib.error.HTTPError as http_err:
+            err_body = ""
+            try:
+                err_body = http_err.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            last_err = Exception(f"HTTP {http_err.code}: {err_body or http_err.reason}")
+            if http_err.code in (401, 403):
+                raise last_err
+        except Exception as e:
+            last_err = e
+
+    if raw_data is None:
+        raise last_err if last_err else Exception("モデル一覧の取得に失敗しました。")
+
+    items = raw_data.get("data", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
+    exclude_keywords = [
+        "embedding", "whisper", "tts", "dall-e", "sora", "audio",
+        "realtime", "transcribe", "moderation", "babbage", "davinci",
+        "ada", "curie", "text-", "codex", "instruct"
+    ]
+
+    seen = set()
+    model_ids = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or item.get("model") or "").strip()
+        if not mid or mid in seen:
+            continue
+        status = str(item.get("status", "")).lower()
+        if status and status not in ("succeeded", "active", "available"):
+            continue
+        caps = item.get("capabilities")
+        if isinstance(caps, dict) and caps.get("chat_completion") is False:
+            continue
+        mid_lower = mid.lower()
+        if any(k in mid_lower for k in exclude_keywords):
+            continue
+        seen.add(mid)
+        model_ids.append(mid)
+
+    def _azure_sort_key(mid):
+        m = mid.lower()
+        ver_m = re.match(r'^gpt-(\d+(?:\.\d+)?)', m)
+        if ver_m:
+            ver_val = float(ver_m.group(1))
+            if ver_val >= 6.0:
+                rank = 0
+            elif ver_val >= 5.0:
+                rank = 1
+            elif ver_val >= 4.5:
+                rank = 3
+            elif ver_val >= 4.1:
+                rank = 4
+            else:
+                rank = 6
+            sub_ver = -ver_val
+        elif m.startswith("o4"):
+            rank, sub_ver = 2, 0.0
+        elif m.startswith("gpt-4o"):
+            rank, sub_ver = 5, 0.0
+        elif m.startswith("o3"):
+            rank, sub_ver = 7, 0.0
+        elif m.startswith("o1"):
+            rank, sub_ver = 8, 0.0
+        else:
+            rank, sub_ver = 9, 0.0
+        # 日付サフィックスがないエイリアス（例: gpt-5）を日付付き（gpt-5-2026-...）より先に表示
+        has_date = 1 if re.search(r'-20\d{2}-', m) else 0
+        return (rank, sub_ver, has_date, m)
+
+    model_ids.sort(key=_azure_sort_key)
+    return model_ids
+
+
+def filter_mainstream_gemini_models(models_list):
+    """
+    Gemini のモデル一覧 [(display_name, model_id), ...] から
+    現在（最新世代）の主力モデルのみを動的に抽出する。
+    ・2026年11月現在: Gemini 4系 (Hydrogen/Carbon/Argon/Neon等) ＋ 3.5以上の最新Flash/Flash-Lite系
+    ・旧世代 (2.5 / 2.0 / 1.5等)・実験版・番号/日付付きスナップショットを除外
+    """
+    if not models_list:
+        return []
+
+    def _extract_ver(mid):
+        m = re.search(r'gemini-(\d+(?:\.\d+)?)', mid.lower())
+        return float(m.group(1)) if m else 0.0
+
+    # 実験版・固定スナップショットを除外したクリーン候補を作成
+    clean_candidates = []
+    for item in models_list:
+        mid = item[1].lower()
+        if any(k in mid for k in ["-exp", "experimental", "thinking-exp", "-latest", "tuning", "robotics"]):
+            continue
+        if re.search(r'-(00\d|\d{2}-\d{2}|20\d{2})', mid):
+            continue
+        clean_candidates.append(item)
+
+    if not clean_candidates:
+        return models_list[:8]
+
+    max_ver = max((_extract_ver(item[1]) for item in clean_candidates), default=0.0)
+
+    mainstream = []
+    for item in clean_candidates:
+        mid = item[1].lower()
+        ver = _extract_ver(mid)
+        if max_ver >= 4.0:
+            # Gemini 4系以上が主力。Flash/Flash-Lite系のみ 3.5以上を軽量主力として残す
+            if ver >= 4.0 or (ver >= 3.5 and "flash" in mid):
+                mainstream.append(item)
+        elif max_ver >= 3.0:
+            # 4系がまだ存在しない環境では 3.x系のみを主力とする（2.5系以下の旧世代は除外）
+            if ver >= 3.0:
+                mainstream.append(item)
+        else:
+            if ver >= max_ver - 0.5:
+                mainstream.append(item)
+
+    return mainstream if mainstream else clean_candidates[:8]
+
+
+def filter_mainstream_azure_models(models_list):
+    """
+    Azure OpenAI のモデル一覧 [model_id, ...] から現在（最新世代）の主力モデルを抽出する。
+    ・2026年11月現在: GPT-6系 / GPT-5系 (gpt-5, gpt-5.1, gpt-5.2, gpt-5-mini/nano/chat/pro等) / o4系を主力とする
+    ・旧世代 (gpt-4o, gpt-4.1, gpt-4, o3, o1, gpt-35等) は、最新世代が存在する環境では除外する
+    ・日付付きモデルIDしか返らない環境では各主力ファミリーの最新1件ずつを自動選出する
+    """
+    if not models_list:
+        return []
+
+    current_prefixes = ("gpt-6", "gpt-5", "o4-mini", "o4")
+    legacy_prefixes = ("gpt-4.5", "gpt-4.1", "gpt-4o", "o3-mini", "o3")
+    date_pattern = re.compile(r'-(20\d{2}-\d{2}-\d{2}|\d{4})$')
+    exclude_sub = ("preview-20", "search", "transcribe", "diarize", "tts", "audio", "codex")
+
+    def _pick_by_prefixes(prefixes):
+        clean = []
+        for mid in models_list:
+            m = mid.lower()
+            if not any(m == p or m.startswith(p + "-") or m.startswith(p + ".") for p in prefixes):
+                continue
+            if date_pattern.search(m):
+                continue
+            if any(k in m for k in exclude_sub):
+                continue
+            clean.append(mid)
+        if clean:
+            return clean
+
+        # 日付付きIDしか存在しない場合は各ファミリーの最新1件を選出
+        family_latest = {}
+        for mid in models_list:
+            m = mid.lower()
+            if not any(m == p or m.startswith(p + "-") or m.startswith(p + ".") for p in prefixes):
+                continue
+            if any(k in m for k in exclude_sub):
+                continue
+            fam = date_pattern.sub("", m)
+            if fam not in family_latest or mid > family_latest[fam]:
+                family_latest[fam] = mid
+        if family_latest:
+            return [mid for mid in models_list if mid in family_latest.values()]
+        return []
+
+    # 第1優先: 現行主力世代 (GPT-6 / GPT-5 / o4)
+    current_main = _pick_by_prefixes(current_prefixes)
+    if current_main:
+        return current_main
+
+    # フォールバック: 現行世代がまだ展開されていないリージョンでは前世代 (GPT-4.1 / 4o / o3)
+    legacy_main = _pick_by_prefixes(legacy_prefixes)
+    if legacy_main:
+        return legacy_main
+
+    return models_list[:8]

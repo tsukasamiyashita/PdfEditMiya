@@ -11,18 +11,46 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import google.generativeai as genai
 
 from common import *
-from gemini_engine import test_azure_connection
+from gemini_engine import (
+    test_azure_connection, fetch_gemini_models, fetch_azure_models,
+    filter_mainstream_gemini_models, filter_mainstream_azure_models
+)
 
 MODELS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_models.json")
 LEGACY_MODELS_FILE = os.path.join(USER_HOME, ".pdfeditmiya_models.json")
+AZURE_MODELS_FILE = os.path.join(APP_DIR, ".pdfeditmiya_azure_models.json")
+
+def load_azure_models_list():
+    default_models = [
+        "gpt-5.2", "gpt-5.1", "gpt-5",
+        "gpt-5-mini", "gpt-5-nano", "gpt-5-chat",
+        "o4-mini"
+    ]
+    if os.path.exists(AZURE_MODELS_FILE):
+        try:
+            with open(AZURE_MODELS_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if isinstance(saved, list) and saved:
+                return [str(m) for m in saved if str(m).strip()]
+        except Exception:
+            pass
+    return default_models
+
+def save_azure_models_list(models_list):
+    try:
+        with open(AZURE_MODELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(models_list, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 def load_models_list():
     default_models = [
-        ("Gemini 3 Flash", "gemini-3-flash"),
-        ("Gemini 3.1 Pro Preview", "gemini-3.1-pro-preview"),
-        ("Gemini 3.1 Flash-Lite Preview", "gemini-3.1-flash-lite-preview"),
-        ("Gemini 2.5 Flash", "gemini-2.5-flash"),
-        ("Gemini 2.5 Pro", "gemini-2.5-pro")
+        ("Gemini 4 Hydrogen", "gemini-4-hydrogen"),
+        ("Gemini 4 Argon", "gemini-4-argon"),
+        ("Gemini 4 Neon", "gemini-4-neon"),
+        ("Gemini 4 Carbon", "gemini-4-carbon"),
+        ("Gemini 3.8 Flash", "gemini-3.8-flash"),
+        ("Gemini 3.5 Flash-Lite", "gemini-3.5-flash-lite")
     ]
     target_file = MODELS_FILE if os.path.exists(MODELS_FILE) else (LEGACY_MODELS_FILE if os.path.exists(LEGACY_MODELS_FILE) else None)
     if target_file:
@@ -258,6 +286,22 @@ def open_api_settings_dialog():
     fav_lists = []
     models = load_models_list()
     model_combos = []
+    gemini_mainstream_only_var = tk.BooleanVar(value=True)
+    gemini_count_labels = []
+
+    def get_visible_gemini_models():
+        if gemini_mainstream_only_var.get():
+            return filter_mainstream_gemini_models(models)
+        return models
+
+    def refresh_gemini_combos():
+        visible = get_visible_gemini_models()
+        values = [m[0] for m in visible]
+        for cb in model_combos:
+            cb.config(values=values)
+        count_text = f"({len(visible)} / {len(models)}件)"
+        for lbl in gemini_count_labels:
+            lbl.config(text=count_text)
 
     def update_all_fav_lists():
         for f_list in fav_lists:
@@ -611,7 +655,7 @@ def open_api_settings_dialog():
 
         ttk.Label(model_inner, text="使用モデル:", width=10, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
 
-        model_combo = ttk.Combobox(model_inner, values=[m[0] for m in models], width=70)
+        model_combo = ttk.Combobox(model_inner, values=[m[0] for m in get_visible_gemini_models()], width=70)
         model_combos.append(model_combo)
 
         current_val = model_var.get()
@@ -662,24 +706,13 @@ def open_api_settings_dialog():
                 btn_fetch_models.config(text="取得中...", state=tk.DISABLED)
                 dialog.update()
 
-                genai.configure(api_key=key)
-                new_models = []
-
-                for m in genai.list_models():
-                    if "generateContent" in m.supported_generation_methods and "gemini" in m.name:
-                        model_name = m.name.replace("models/", "")
-                        exclude_keywords = ["tts", "audio", "image", "vision", "embedding"]
-                        if any(k in model_name.lower() for k in exclude_keywords):
-                            continue
-                        display_name = m.display_name
-                        new_models.append((f"{display_name} ({model_name})", model_name))
+                new_models = fetch_gemini_models(key)
 
                 if new_models:
                     models.clear()
                     models.extend(new_models)
                     save_models_list(models)
-                    for cb in model_combos:
-                        cb.config(values=[m[0] for m in models])
+                    refresh_gemini_combos()
 
                     for m_var_ref, cb_ref in [(state.gemini_model_free_var, model_combos[0]), (state.gemini_model_paid_var, model_combos[1])]:
                         current_model_id = m_var_ref.get()
@@ -688,20 +721,27 @@ def open_api_settings_dialog():
                                 cb_ref.set(new_m[0])
                                 break
 
-                    messagebox.showinfo("更新完了", f"最新のモデルリスト ({len(models)}件) をAPIから取得しました！\nコンボボックスの選択肢が更新されました。", parent=dialog)
+                    vis_cnt = len(get_visible_gemini_models())
+                    mode_note = f"（主力モデル {vis_cnt}件 を表示中。すべて見る場合は「主力モデルのみ表示」のチェックを外してください）" if gemini_mainstream_only_var.get() else f"（全 {vis_cnt}件 を表示中）"
+                    messagebox.showinfo("更新完了", f"最新のモデルリスト (全{len(models)}件) を Gemini API から取得しました！\n{mode_note}", parent=dialog)
                 else:
                     messagebox.showinfo("情報", "取得可能なモデルが見つかりませんでした。", parent=dialog)
             except Exception as e:
                 diag = diagnose_api_error("gemini", e)
                 show_api_error_dialog(dialog, diag)
             finally:
-                btn_fetch_models.config(text="🌐 更新", state=tk.NORMAL)
+                btn_fetch_models.config(text="🌐 最新モデルを更新", state=tk.NORMAL)
 
-        btn_fetch_models = ttk.Button(model_inner, text="🌐 更新", width=8, command=fetch_models)
+        btn_fetch_models = ttk.Button(model_inner, text="🌐 最新モデルを更新", width=18, command=fetch_models)
         btn_fetch_models.pack(side=tk.LEFT, padx=(5, 0))
 
         link_inner = ttk.Frame(perf_frame, style="Card.TFrame")
-        link_inner.pack(fill=tk.X, pady=(0, 5))
+        link_inner.pack(fill=tk.X, pady=(2, 5))
+        chk_mainstream = ttk.Checkbutton(link_inner, text="主力モデルのみ表示", variable=gemini_mainstream_only_var, command=refresh_gemini_combos, style="TCheckbutton")
+        chk_mainstream.pack(side=tk.LEFT)
+        lbl_g_cnt = ttk.Label(link_inner, text=f"({len(get_visible_gemini_models())} / {len(models)}件)", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8))
+        lbl_g_cnt.pack(side=tk.LEFT, padx=(2, 0))
+        gemini_count_labels.append(lbl_g_cnt)
         lbl_link = ttk.Label(link_inner, text="🔗 各モデルの特徴を確認する (公式)", cursor="hand2", foreground=PRIMARY, font=("Segoe UI", 9, "underline"), background=CARD_BG)
         lbl_link.pack(side=tk.RIGHT, padx=5)
         lbl_link.bind("<Button-1>", lambda e: webbrowser.open_new("https://ai.google.dev/gemini-api/docs/models/gemini"))
@@ -777,25 +817,29 @@ def open_api_settings_dialog():
             create_table(sf_info, headers_plan, data_plan, [150, 360, 360])
 
             KNOWN_MODEL_INFO = {
-                "gemini-3.1-pro-preview": {
-                    "limit": ["非常に厳しい (2 RPM未満など)\n[推奨: 1 RPM / 直列(1)]", "時期・モデルにより変動\n[推奨: 150 RPM / 並列(5)]"],
-                    "desc": ["最新鋭・最高精度モデル", "複雑な表の構造解析、かすれた手書き文字の正確な読み取り、論理推論", "複雑なレイアウトのPDF、絶対にミスが許されないデータ抽出"]
+                "gemini-4-hydrogen": {
+                    "limit": ["15 RPM目安\n[推奨: 12 RPM / 直列(1)]", "高スループット\n[推奨: 300 RPM / 並列(5〜)]"],
+                    "desc": ["Gemini 4 標準主力モデル", "汎用性・スピード・マルチモーダル精度の高いバランス", "一般的な図面管理台帳やPDFのテキスト・表抽出（デフォルト推奨）"]
                 },
-                "gemini-3-flash": {
-                    "limit": ["15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                    "desc": ["高速・高性能バランス型", "スピードと精度の高い両立、画像認識（マルチモーダル）", "一般的な図面管理台帳やPDFのテキスト・表抽出（デフォルト推奨）"]
+                "gemini-4-argon": {
+                    "limit": ["制限目安は公式参照\n[推奨: 5 RPM / 直列(1)]", "時期・枠により変動\n[推奨: 200 RPM / 並列(5)]"],
+                    "desc": ["高効率フロンティア推論", "高い知能と高速応答・トークン効率の両立", "複雑な表構造の解析と処理速度を両立したい場合"]
                 },
-                "gemini-3.1-flash-lite-preview": {
-                    "limit": ["15 RPM, 1500 RPD\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
-                    "desc": ["最軽量・低コストモデル", "圧倒的な処理スピードと低コスト（Proの約1/8の価格）", "画質が良いPDFの単純なテキスト抽出、大量データを安価に処理したい場合"]
+                "gemini-4-neon": {
+                    "limit": ["制限目安は公式参照\n[推奨: 2 RPM / 直列(1)]", "時期・枠により変動\n[推奨: 150 RPM / 並列(5)]"],
+                    "desc": ["構造化抽出・高度推論モデル", "複雑な構造化データ抽出と段階的思考", "手書きや変則レイアウトの帳票を精密に構造化したい場合"]
                 },
-                "gemini-2.5-flash": {
-                    "limit": ["15 RPM", "1000 RPM"],
-                    "desc": ["標準モデル", "高速・安定したマルチモーダル認識", "一般的なPDFのテキスト・表抽出"]
+                "gemini-4-carbon": {
+                    "limit": ["非常に厳しい\n[推奨: 1 RPM / 直列(1)]", "時期・枠により変動\n[推奨: 100 RPM / 並列(3〜5)]"],
+                    "desc": ["最上位フロンティアモデル", "極めて複雑な表構造解析、かすれた手書き文字、高度推論", "絶対にミスが許されない複雑なPDFのデータ抽出"]
                 },
-                "gemini-2.5-pro": {
-                    "limit": ["2 RPM", "360 RPM"],
-                    "desc": ["高精度モデル", "高度な表構造・手書き認識", "複雑なレイアウトのPDF"]
+                "gemini-3.8-flash": {
+                    "limit": ["15 RPM目安\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                    "desc": ["高速・軽量Flash最新世代", "低遅延・大量ページ処理・マルチモーダル対応", "大量のPDFページを高速に処理したい場合"]
+                },
+                "gemini-3.5-flash-lite": {
+                    "limit": ["15 RPM目安\n[推奨: 12 RPM / 直列(1)]", "1000 RPM\n[推奨: 300 RPM / 並列(5〜)]"],
+                    "desc": ["最軽量・低コストモデル", "圧倒的な処理スピードと低コスト", "画質が良いPDFの単純なテキスト抽出、大量データの安価な処理"]
                 }
             }
 
@@ -832,7 +876,7 @@ def open_api_settings_dialog():
         btn_show_limit.pack(side=tk.LEFT)
 
         def reset_perf(cb=model_combo, m_var=model_var, r_var=rpm_var, t_var=threads_var, is_f=is_free):
-            target_model_val = "gemini-3.1-flash-lite-preview"
+            target_model_val = "gemini-4-hydrogen"
             m_var.set(target_model_val)
             cb.set(target_model_val)
             for m in models:
@@ -913,15 +957,87 @@ def open_api_settings_dialog():
         row_dep = ttk.Frame(conn_frame, style="Card.TFrame")
         row_dep.pack(fill=tk.X, pady=(2, 0))
         ttk.Label(row_dep, text="デプロイ名:", width=16, background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
-        common_deployments = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini", "o3-mini"]
-        combo_dep = ttk.Combobox(row_dep, textvariable=state.azure_deployment_var, values=common_deployments, width=25)
-        combo_dep.pack(side=tk.LEFT, padx=(0, 15))
+        azure_models_all = load_azure_models_list()
+        azure_mainstream_only_var = tk.BooleanVar(value=True)
+
+        def get_visible_azure_models():
+            if azure_mainstream_only_var.get():
+                return filter_mainstream_azure_models(azure_models_all)
+            return azure_models_all
+
+        combo_dep = ttk.Combobox(row_dep, textvariable=state.azure_deployment_var, values=get_visible_azure_models(), width=26)
+        combo_dep.pack(side=tk.LEFT, padx=(0, 5))
         combo_dep.bind("<Button-3>", lambda e, widget=combo_dep: show_context_menu(e, widget))
+
+        def refresh_azure_combo():
+            visible = get_visible_azure_models()
+            combo_dep.config(values=visible)
+            lbl_az_cnt.config(text=f"({len(visible)} / {len(azure_models_all)}件)")
+
+        def fetch_azure_models_ui():
+            raw_ep = state.azure_endpoint_var.get().strip()
+            key = state.azure_api_key_var.get().strip()
+            dep = state.azure_deployment_var.get().strip()
+            ver = state.azure_api_version_var.get().strip()
+
+            base_ep, resolved_dep, resolved_ver = parse_azure_endpoint_info(raw_ep, dep, ver)
+            if base_ep:
+                state.azure_endpoint_var.set(base_ep)
+            if resolved_dep and not dep:
+                state.azure_deployment_var.set(resolved_dep)
+            if resolved_ver:
+                state.azure_api_version_var.set(resolved_ver)
+
+            if not base_ep:
+                return messagebox.showwarning("警告", "最新モデルを取得するには、エンドポイントURLを入力してください。", parent=dialog)
+            if not key:
+                return messagebox.showwarning("警告", "最新モデルを取得するには、APIキーを入力してください。", parent=dialog)
+
+            try:
+                btn_fetch_az_models.config(text="取得中...", state=tk.DISABLED)
+                dialog.update()
+
+                new_az_models = fetch_azure_models(key, base_ep, resolved_ver)
+                if new_az_models:
+                    azure_models_all.clear()
+                    azure_models_all.extend(new_az_models)
+                    save_azure_models_list(azure_models_all)
+                    refresh_azure_combo()
+                    vis_models = get_visible_azure_models()
+                    if not state.azure_deployment_var.get().strip() and vis_models:
+                        state.azure_deployment_var.set(vis_models[0])
+                    mode_note = f"（主力モデル {len(vis_models)}件 を表示中。すべて見る場合は「主力モデルのみ表示」のチェックを外してください）" if azure_mainstream_only_var.get() else f"（全 {len(vis_models)}件 を表示中）"
+                    messagebox.showinfo(
+                        "更新完了",
+                        f"最新のモデルリスト (全{len(azure_models_all)}件) を Azure から取得しました！\n"
+                        f"{mode_note}\n\n"
+                        f"※Azure AI Foundry 上でモデル名とは別の独自デプロイ名を付けている場合は、そのまま手入力してご使用ください。",
+                        parent=dialog
+                    )
+                else:
+                    messagebox.showinfo("情報", "取得可能なチャット対応モデルが見つかりませんでした。", parent=dialog)
+            except Exception as e:
+                diag = diagnose_api_error("azure", e, model_or_deployment=resolved_dep, endpoint=base_ep)
+                show_api_error_dialog(dialog, diag)
+            finally:
+                btn_fetch_az_models.config(text="🌐 最新モデルを更新", state=tk.NORMAL)
+
+        btn_fetch_az_models = ttk.Button(row_dep, text="🌐 最新モデルを更新", width=18, command=fetch_azure_models_ui)
+        btn_fetch_az_models.pack(side=tk.LEFT, padx=(0, 12))
 
         ttk.Label(row_dep, text="APIバージョン:", background=CARD_BG, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
         common_versions = ["2024-10-21", "2024-12-01-preview", "2025-01-01-preview", "2024-08-01-preview", "2024-06-01", "2024-02-15-preview"]
-        combo_ver = ttk.Combobox(row_dep, textvariable=state.azure_api_version_var, values=common_versions, width=18)
-        combo_ver.pack(side=tk.LEFT, padx=(0, 10))
+        combo_ver = ttk.Combobox(row_dep, textvariable=state.azure_api_version_var, values=common_versions, width=16)
+        combo_ver.pack(side=tk.LEFT, padx=(0, 8))
+
+        row_dep_opt = ttk.Frame(conn_frame, style="Card.TFrame")
+        row_dep_opt.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(row_dep_opt, text="", width=16, background=CARD_BG).pack(side=tk.LEFT)
+        chk_az_mainstream = ttk.Checkbutton(row_dep_opt, text="主力モデルのみ表示", variable=azure_mainstream_only_var, command=refresh_azure_combo, style="TCheckbutton")
+        chk_az_mainstream.pack(side=tk.LEFT)
+        lbl_az_cnt = ttk.Label(row_dep_opt, text=f"({len(get_visible_azure_models())} / {len(azure_models_all)}件)", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8))
+        lbl_az_cnt.pack(side=tk.LEFT, padx=(2, 12))
+        ttk.Label(row_dep_opt, text="※独自のデプロイ名を付けている場合は直接入力も可能です", background=CARD_BG, foreground=MUTED_TEXT, font=("Segoe UI", 8)).pack(side=tk.LEFT)
 
         def test_azure():
             raw_ep = state.azure_endpoint_var.get().strip()
@@ -1057,9 +1173,9 @@ def open_api_settings_dialog():
                 sf_info,
                 ["モデル種別", "特徴", "おすすめの用途", "推奨設定目安 (RPM / 並列数)"],
                 [
-                    ["gpt-4o\ngpt-4.1", "高精度・マルチモーダル標準", "手書き文字、複雑な表構造、図面管理台帳の精密な抽出（最もおすすめ）", "60 RPM / 並列 3〜5"],
-                    ["gpt-4o-mini\ngpt-4.1-mini", "高速・低コスト・軽量", "活字メインのスキャンPDF、大量ページの高速処理・コスト重視の運用", "120 RPM / 並列 5〜10"],
-                    ["o4-mini / o3 / o1", "高度な推論モデル", "極めて複雑なレイアウトや文脈判断が必要な帳票（※本アプリ側で自動的に推論モデル用パラメータへ切り替わります）", "30 RPM / 並列 1〜3"]
+                    ["gpt-5.2 / gpt-5.1\ngpt-5 / gpt-6", "最新主力フラグシップ", "手書き文字、複雑な表構造、図面管理台帳の精密な抽出（最もおすすめ）", "60 RPM / 並列 3〜5"],
+                    ["gpt-5-mini\ngpt-5-nano", "高速・低コスト・軽量主力", "活字メインのスキャンPDF、大量ページの高速処理・コスト重視の運用", "120 RPM / 並列 5〜10"],
+                    ["o4-mini", "高度な推論モデル", "極めて複雑なレイアウトや文脈判断が必要な帳票（※本アプリ側で自動的に推論モデル用パラメータへ切り替わります）", "30 RPM / 並列 1〜3"]
                 ],
                 [150, 180, 330, 200]
             )
